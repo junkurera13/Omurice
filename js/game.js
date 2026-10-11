@@ -1,552 +1,584 @@
-import { Bowl, Pan, BN, PN, scoreRun, clamp, sstep, lerp } from './sim.js';
-import { EggSurface, drawStoveBackground, drawBurner, drawPan, drawButter, Wisps, drawLog, roundRect, hash } from './render.js';
-import { Plate } from './plate.js';
+import * as THREE from '../vendor/three.module.min.js';
+import { Bowl, Pan, scoreRun, clamp, sstep, lerp } from './sim.js';
+import { World, SETS } from './world.js';
+import { woodTexture } from './textures.js';
+import { Stove, Pan3D, Chopsticks } from './pan3d.js';
+import { Bowl3D } from './bowl3d.js';
+import { Plate3D, surface } from './plate3d.js';
+import { Chef } from './chef.js';
 import { Sound } from './audio.js';
 import { fetchBoard, submitScore } from './net.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
-const cv = $('#cv');
-const ctx = cv.getContext('2d');
-const W = cv.width, H = cv.height;
 const sound = new Sound();
-const surface = new EggSurface();
-const wisps = new Wisps();
-let plate = null; // built lazily (needs a DOM canvas)
+const chef = new Chef($('#chef'), $('#bubble'));
+
+// Camera spots, relative to each set's origin.
+const VIEWS = {
+  beat: { set: 'bowl', pos: V(0, 33, 27), at: V(0, 2, 0.5) },
+  cook: { set: 'stove', pos: V(0, 40, 27), at: V(0, 2, -0.5) },
+  fold: { set: 'stove', pos: V(-26, 21, 14), at: V(0, 3, -3.5) },
+  plate: { set: 'plate', pos: V(0, 40, 33), at: V(0, 1.5, 0.5) },
+  judge: { set: 'plate', pos: V(-5, 21, 28), at: V(0, 3.6, 0.3) },
+};
+const viewPos = v => [v.pos.clone().add(SETS[v.set]), v.at.clone().add(SETS[v.set])];
+
+/* ------------------------------------------------------------------ */
+/* World                                                               */
+/* ------------------------------------------------------------------ */
+
+let world, stove, pan3d, bowl3d, plate3d, bowlSticks, panSticks;
+try {
+  world = new World($('#gl'));
+  const wood = woodTexture();
+  wood.repeat.set(2, 2);
+  bowl3d = new Bowl3D(world, SETS.bowl, wood);
+  stove = new Stove(world, SETS.stove);
+  pan3d = new Pan3D(world, stove);
+  plate3d = new Plate3D(world, SETS.plate, wood);
+  bowlSticks = new Chopsticks(bowl3d.group);
+  panSticks = new Chopsticks(pan3d.group);
+  const [p, t] = viewPos(VIEWS.cook);
+  world.snapCamera(p.add(V(0, 8, 10)), t);
+  world.setFocus(SETS.stove);
+  bowl3d.group.visible = plate3d.group.visible = false;
+  world.tameReflections();
+  new ResizeObserver(() => world.resize()).observe($('#gl'));
+} catch (e) {
+  console.error(e);
+  $('#loading').textContent = 'This browser can’t draw 3D (WebGL is off).';
+}
+
+/* ------------------------------------------------------------------ */
+/* State                                                               */
+/* ------------------------------------------------------------------ */
 
 const S = {
-  step: 'idle', // idle | beat | cook | plate | cut | reveal | result
-  name: '',
-  bowl: null, pan: null,
-  t: 0,
-  pointer: { x: 0, y: 0, down: false, vx: 0, vy: 0, lastT: 0, inside: false },
-  tiltKey: 0,
-  rollAnim: 0, rollKick: 0,
-  plateT: 0,
-  slitPath: [],
-  result: null,
-  submitted: false,
-  shake: 0,
+  stage: 'title', handle: '', bowl: null, pan: null, t: 0,
+  ptr: { down: false, last: null, lastT: 0, vx: 0, vy: 0 },
+  tiltHeld: false, roll: 0, kick: 0, result: null, submitted: false,
+  judgeT: 0, spec: null,
 };
-try { S.name = localStorage.getItem('omu-name') || ''; } catch {}
+try { S.handle = localStorage.getItem('omu-handle') || ''; } catch {}
+$('#handle').value = S.handle;
 
 /* ------------------------------------------------------------------ */
-/* Window chrome                                                       */
+/* Chrome: screens, grain, boil, sound                                 */
 /* ------------------------------------------------------------------ */
 
-let zTop = 20;
-function openWin(id) {
-  const w = document.getElementById(id);
-  if (!w) return;
-  w.hidden = false;
-  w.style.zIndex = ++zTop;
-  focusWin(w);
-  if (id === 'win-board') loadBoard();
-  if (id === 'win-main') w.hidden = false;
-}
-function closeWin(id) {
-  const w = document.getElementById(id);
-  if (w) w.hidden = true;
-}
-function focusWin(w) {
-  $$('.window').forEach(x => x.classList.toggle('inactive', x !== w));
-  w.style.zIndex = ++zTop;
-}
+let zc = 0;
 document.addEventListener('click', e => {
-  const o = e.target.closest('[data-open]');
-  if (o) { openWin(o.dataset.open); closeStart(); }
+  const o = e.target.closest('[data-screen]');
+  if (o) {
+    const el = $('#s-' + o.dataset.screen);
+    el.hidden = false;
+    el.style.zIndex = 60 + (++zc);
+    if (o.dataset.screen === 'fame') loadFame();
+  }
   const c = e.target.closest('[data-close]');
-  if (c) closeWin(c.dataset.close);
-  const a = e.target.closest('[data-act]');
-  if (a && a.dataset.act === 'new') { closeStart(); newTrial(); }
-  const m = e.target.closest('[data-min]');
-  if (m) { /* the main window doesn't really minimise; it just stays put */ focusWin($('#win-main')); }
+  if (c) c.closest('.screen').hidden = true;
 });
-$$('.window').forEach(w => w.addEventListener('pointerdown', () => focusWin(w)));
-
-// Drag windows by their title bars (desktop only).
-$$('.window .titlebar').forEach(tb => {
-  tb.addEventListener('pointerdown', e => {
-    if (e.target.closest('button') || window.innerWidth < 760) return;
-    const w = tb.closest('.window');
-    const r = w.getBoundingClientRect();
-    const dx = e.clientX - r.left, dy = e.clientY - r.top;
-    w.style.transform = 'none';
-    w.style.left = r.left + 'px'; w.style.top = r.top + 'px';
-    tb.setPointerCapture(e.pointerId);
-    const mv = ev => {
-      w.style.left = clamp(ev.clientX - dx, -r.width + 80, window.innerWidth - 80) + 'px';
-      w.style.top = clamp(ev.clientY - dy, 0, window.innerHeight - 60) + 'px';
-    };
-    const up = () => { tb.removeEventListener('pointermove', mv); tb.removeEventListener('pointerup', up); };
-    tb.addEventListener('pointermove', mv);
-    tb.addEventListener('pointerup', up);
-  });
+['s-recipe', 's-fame'].forEach(id => $('#' + id).addEventListener('click', e => { if (e.target.id === id) e.target.hidden = true; }));
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') ['s-recipe', 's-fame'].forEach(id => ($('#' + id).hidden = true));
 });
 
-// Start menu.
-const startMenu = document.createElement('div');
-startMenu.className = 'startmenu raised window';
-startMenu.hidden = true;
-startMenu.innerHTML = `<div class="side"><b>Omurice</b>95</div><ul>
-  <li><button data-act="new"><span class="tb-ico ico-egg"></span>New trial</button></li>
-  <li><button data-open="win-board"><span class="tb-ico ico-trophy"></span>Hall of Fame</button></li>
-  <li><button data-open="win-notes"><span class="tb-ico ico-note"></span>Chef's notes</button></li>
-  <li><hr></li>
-  <li><button id="sm-shut">Shut down…</button></li></ul>`;
-document.body.appendChild(startMenu);
-const startBtn = $('#start');
-startBtn.setAttribute('aria-expanded', 'false');
-startBtn.addEventListener('click', e => {
-  e.stopPropagation();
-  const open = startMenu.hidden;
-  startMenu.hidden = !open;
-  startBtn.setAttribute('aria-expanded', String(open));
-  startMenu.style.zIndex = 99;
-});
-function closeStart() { startMenu.hidden = true; startBtn.setAttribute('aria-expanded', 'false'); }
-document.addEventListener('pointerdown', e => { if (!startMenu.contains(e.target) && e.target !== startBtn && !startBtn.contains(e.target)) closeStart(); });
-$('#sm-shut').addEventListener('click', () => { closeStart(); setStatus('Nice try. Nobody leaves the kitchen during a trial.'); });
+// Film grain: one noise tile, jittered by CSS.
+(() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 180;
+  const x = c.getContext('2d'), im = x.createImageData(180, 180);
+  for (let i = 0; i < im.data.length; i += 4) {
+    const v = Math.random() * 255;
+    im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255;
+  }
+  x.putImageData(im, 0, 0);
+  $('.grain').style.backgroundImage = `url(${c.toDataURL()})`;
+})();
+// Boiling ink lines.
+const boil = $('#boil-noise');
+let boilSeed = 1;
+if (!matchMedia('(prefers-reduced-motion: reduce)').matches) setInterval(() => boil.setAttribute('seed', String((boilSeed = (boilSeed % 4) + 1))), 130);
 
-function tickClock() {
-  const d = new Date();
-  $('#clock').textContent = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-tickClock(); setInterval(tickClock, 15000);
-
-// Sound toggle.
 const muteBtn = $('#mute');
-function syncMute() { muteBtn.textContent = 'Sound: ' + (sound.muted ? 'Off' : 'On'); muteBtn.setAttribute('aria-pressed', String(sound.muted)); }
+const syncMute = () => { muteBtn.textContent = sound.muted ? 'Sound off' : 'Sound on'; muteBtn.setAttribute('aria-pressed', String(sound.muted)); };
 muteBtn.addEventListener('click', () => { sound.init(); sound.setMuted(!sound.muted); syncMute(); });
 syncMute();
 
-function setStatus(t) { $('#status').textContent = t; }
-function banner(t) {
-  const b = $('#banner');
-  if (!t) { b.hidden = true; return; }
-  b.textContent = t; b.hidden = false;
+function caption(t) {
+  const c = $('#caption');
+  if (!t) { c.hidden = true; return; }
+  c.textContent = t; c.hidden = false;
 }
 
-/* ------------------------------------------------------------------ */
-/* Application form                                                    */
-/* ------------------------------------------------------------------ */
-
-const nameIn = $('#name');
-nameIn.value = S.name;
-$('#apply-form').addEventListener('submit', e => {
-  e.preventDefault();
-  const n = nameIn.value.trim().replace(/\s+/g, ' ');
-  const err = $('#name-err');
-  if (n.length < 2) { err.textContent = 'Please enter at least 2 characters.'; err.hidden = false; return; }
-  if (!/^[\p{L}\p{N} _.@\-']+$/u.test(n)) { err.textContent = 'Letters, numbers, spaces and _ . @ - only.'; err.hidden = false; return; }
-  err.hidden = true;
-  S.name = n;
-  try { localStorage.setItem('omu-name', n); } catch {}
-  $('#who').textContent = 'Applicant: ' + n;
-  closeWin('win-apply');
-  sound.init();
-  startBeat();
-});
-
-function newTrial() {
-  closeWin('win-result');
-  S.step = 'idle';
-  showPanel('beat');
-  setSteps('beat');
-  openWin('win-main');
-  openWin('win-apply');
-  setTimeout(() => nameIn.focus(), 50);
-}
-
-/* ------------------------------------------------------------------ */
-/* Stage plumbing                                                      */
-/* ------------------------------------------------------------------ */
-
-function showPanel(p) {
-  $$('#panel > [data-panel]').forEach(el => (el.hidden = el.dataset.panel !== p));
-}
-function setSteps(cur) {
-  const order = ['beat', 'cook', 'plate', 'cut'];
-  const ci = order.indexOf(cur);
-  $$('#steps li').forEach((li, i) => {
-    li.classList.toggle('now', i === ci);
-    li.classList.toggle('done', ci > i || cur === 'done');
+// Classic cartoon iris wipe between scenes.
+function iris(mid) {
+  const el = $('#iris');
+  const t0 = performance.now();
+  return new Promise(res => {
+    const close = now => {
+      const k = Math.min(1, (now - t0) / 380);
+      el.style.setProperty('--r', `${(1 - k) * 100}%`);
+      if (k < 1) return requestAnimationFrame(close);
+      mid && mid();
+      setTimeout(() => {
+        const t1 = performance.now();
+        const open = n2 => {
+          const k2 = Math.min(1, (n2 - t1) / 450);
+          el.style.setProperty('--r', `${k2 * k2 * 100}%`);
+          if (k2 < 1) requestAnimationFrame(open); else res();
+        };
+        requestAnimationFrame(open);
+      }, 120);
+    };
+    requestAnimationFrame(close);
   });
 }
 
-// Canvas pointer -> canvas pixels.
-function canvasPt(e) {
-  const r = cv.getBoundingClientRect();
-  return [((e.clientX - r.left) / r.width) * W, ((e.clientY - r.top) / r.height) * H];
+function setStage(stage) {
+  S.stage = stage;
+  $$('.side [data-panel]').forEach(p => (p.hidden = p.dataset.panel !== stage));
+  const order = ['beat', 'cook', 'fold', 'plate', 'judge'];
+  const i = order.indexOf(stage);
+  $$('#steps li').forEach((li, k) => { li.classList.toggle('now', k === i); li.classList.toggle('done', i > k || stage === 'result'); });
+}
+function showSet(name) {
+  bowl3d.group.visible = name === 'bowl';
+  stove.group.visible = name === 'stove';
+  plate3d.group.visible = name === 'plate';
+}
+function goView(name, smooth = true) {
+  if (!world) return;
+  const v = VIEWS[name];
+  const [p, t] = viewPos(v);
+  showSet(v.set);
+  world.setFocus(SETS[v.set]);
+  smooth ? world.moveCamera(p, t, 1.1) : world.snapCamera(p, t);
 }
 
-/* ---------------- 1. Beat ---------------- */
+/* ------------------------------------------------------------------ */
+/* Title / application                                                 */
+/* ------------------------------------------------------------------ */
 
-const BOWL = { cx: 300, cy: 245, r: 200 };
-const bowlCell = () => (BOWL.r * 0.86 * 2) / (BN * 0.46 * 2);
-function toBowl(x, y) {
-  const s = bowlCell();
-  return [(x - BOWL.cx) / s + (BN - 1) / 2, (y - BOWL.cy) / s + (BN - 1) / 2];
-}
+$('#apply').addEventListener('submit', e => {
+  e.preventDefault();
+  const h = $('#handle').value.trim().replace(/^@+/, '');
+  const err = $('#handle-err');
+  if (!/^[A-Za-z0-9_]{1,15}$/.test(h)) {
+    err.textContent = 'Use your 𝕏 username: letters, numbers and _ only, up to 15.';
+    err.hidden = false; return;
+  }
+  err.hidden = true;
+  S.handle = h;
+  try { localStorage.setItem('omu-handle', h); } catch {}
+  sound.init();
+  $('#s-title').hidden = true;
+  startBeat();
+});
+$('#r-again').addEventListener('click', () => { $('#s-result').hidden = true; startBeat(); });
+
+/* ------------------------------------------------------------------ */
+/* 1. Beat                                                             */
+/* ------------------------------------------------------------------ */
 
 function startBeat() {
   S.bowl = new Bowl((Math.random() * 1e9) | 0);
   S.pan = new Pan((Math.random() * 1e9) | 0);
-  S.step = 'beat';
-  S.t = 0;
-  S.submitted = false;
-  S.result = null;
-  plate = null;
-  $('#egg-n').textContent = '(0/3)';
+  S.roll = 0; S.kick = 0; S.submitted = false; S.result = null; S.tiltHeld = false;
+  if (pan3d) pan3d.reset();
+  if (plate3d) plate3d.reset();
+  $('#egg-n').textContent = '0/3';
   $('#b-crack').disabled = false;
   $('#b-to-cook').disabled = true;
-  $('#shell-warn').hidden = true;
-  $('#m-mix i').style.width = '0%';
-  showPanel('beat'); setSteps('beat');
-  setStatus('Crack three eggs into the bowl.');
-  banner('Crack 3 eggs, then beat them smooth');
+  $('#m-mix').style.width = '0%';
+  $('#m-fold').style.width = '0%';
+  $('#b-butter').disabled = false; $('#butter-g').textContent = '(10 g)';
+  $('#b-pour').disabled = true; $('#b-to-fold').disabled = true; $('#b-to-plate').disabled = true;
+  iris(() => { setStage('beat'); goView('beat', false); });
+  chef.say(`@${S.handle}, is it? Three eggs. Beat them smooth. No shell.`, 'sniff');
+  caption('Click the bowl to crack an egg');
 }
 
-function crackEgg(x, y) {
+function crackEgg() {
   const b = S.bowl;
   if (!b || b.eggs >= 3) return;
-  const [gx, gy] = x != null ? toBowl(x, y) : [(BN - 1) / 2 + (Math.random() - 0.5) * 18, (BN - 1) / 2 + (Math.random() - 0.5) * 18];
-  const res = b.crack(gx, gy);
-  sound.crack();
-  setTimeout(() => sound.plop(), 120);
-  $('#egg-n').textContent = `(${b.eggs}/3)`;
-  if (res && res.shell) { $('#shell-warn').hidden = false; setStatus('Oops. A piece of shell went in. Tap it to fish it out.'); }
+  const res = b.crack((b.N - 1) / 2 + (Math.random() - 0.5) * 16, (b.N - 1) / 2 + (Math.random() - 0.5) * 16);
+  if (bowl3d) bowl3d.crackAnim();
+  sound.crack(); setTimeout(() => sound.plop(), 160);
+  $('#egg-n').textContent = `${b.eggs}/3`;
+  if (res && res.shell) chef.say('Shell! I saw that. Click it to fish it out.', 'angry');
   if (b.eggs === 3) {
     $('#b-crack').disabled = true;
     $('#b-to-cook').disabled = false;
-    banner('Drag in fast circles to beat');
-    if (!b.shells.length) setStatus('Beat until there are no streaks of white.');
-  }
+    caption('Drag around the bowl in fast circles');
+    if (!b.shells.length) chef.say('Now beat. Quick circles. I want no white streaks.', 'neutral');
+  } else caption(`Crack another (${b.eggs}/3)`);
 }
 $('#b-crack').addEventListener('click', () => { sound.init(); crackEgg(); });
-$('#b-to-cook').addEventListener('click', startCook);
+$('#b-to-cook').addEventListener('click', () => {
+  startCook();
+  if (S.bowl.shells.length) setTimeout(() => chef.say('You left shell in that bowl. I’ll remember.', 'angry'), 900);
+});
 
-/* ---------------- 2. Cook ---------------- */
-
-const PANG = { cx: 300, cy: 222, r: 196 };
-const panCell = () => (PANG.r * 2) / (S.pan.R * 2);
-function panSquash() { return 1 - S.pan.tiltY * 0.14; }
-function toPan(x, y) {
-  const s = panCell();
-  const cy = PANG.cy - S.pan.tiltY * 10;
-  return [(x - PANG.cx) / s + S.pan.c, ((y - cy) / panSquash()) / s + S.pan.c];
-}
+/* ------------------------------------------------------------------ */
+/* 2. Cook                                                             */
+/* ------------------------------------------------------------------ */
 
 function startCook() {
-  S.step = 'cook';
-  S.cookStart = performance.now();
-  showPanel('cook'); setSteps('cook');
+  iris(() => { setStage('cook'); goView('cook', false); });
+  setKnob(0);
   $('#b-pour').disabled = false;
-  $('#b-tap').disabled = true;
-  $('#b-to-plate').disabled = true;
-  $('#tilt').value = 0;
-  $$('input[name=knob]').forEach(r => (r.checked = r.value === '0'));
-  S.pan.setKnob(0);
-  banner('Heat the pan, butter it, pour, scramble, roll');
-  setStatus('Burner is off. The pan is cold.');
+  chef.say('Light the burner. Butter. Pour when it foams. Then scramble like you mean it.', 'neutral');
+  caption('Turn the heat on and add butter');
 }
-
-$$('input[name=knob]').forEach(r => r.addEventListener('change', () => { sound.init(); if (S.pan) S.pan.setKnob(+r.value); }));
-$('#b-butter').addEventListener('click', () => {
+function setKnob(k) {
+  if (S.pan) S.pan.setKnob(k);
+  $$('input[name=knob]').forEach(r => (r.checked = +r.value === k));
+  $$('input[name=knob2]').forEach(r => (r.checked = +r.value === k));
+  $('#knob-rot').style.transform = `rotate(${[-120, -40, 40, 120][k]}deg)`;
   sound.init();
+  if (k) sound.burst(0.25, 1200, 1, 0.15);
+}
+$$('input[name=knob], input[name=knob2]').forEach(r => r.addEventListener('change', () => setKnob(+r.value)));
+$('#b-butter').addEventListener('click', () => {
   if (!S.pan || S.pan.poured) return;
   if (S.pan.addButter()) { sound.plop(); if (S.pan.T > 110) sound.sizzle(1, 1); }
-  $('#b-butter').textContent = `Add butter (${S.pan.butter} g in pan)`;
+  $('#butter-g').textContent = `(${S.pan.butter} g in)`;
+  caption('');
 });
 $('#b-pour').addEventListener('click', () => {
-  sound.init();
   if (!S.pan || S.pan.poured) return;
   S.pan.startPour(S.bowl);
   $('#b-pour').disabled = true;
   $('#b-butter').disabled = true;
-  $('#b-tap').disabled = false;
-  $('#b-to-plate').disabled = false;
-  banner('Drag in the pan to stir with chopsticks');
-  setTimeout(() => { if (S.step === 'cook') banner(''); }, 3500);
+  caption('Drag in the pan to scramble with the chopsticks');
+  setTimeout(() => { if (S.stage === 'cook') caption(''); }, 4000);
+  setTimeout(() => { if (S.stage === 'cook') $('#b-to-fold').disabled = false; }, 1600);
 });
-const tiltIn = $('#tilt');
-tiltIn.addEventListener('input', () => { if (S.pan) S.pan.tiltY = +tiltIn.value / 100; });
+$('#b-to-fold').addEventListener('click', startFold);
+
+/* ------------------------------------------------------------------ */
+/* 3. Fold: tilt the pan and tap the wrist                             */
+/* ------------------------------------------------------------------ */
+
+function startFold() {
+  setStage('fold');
+  goView('fold');
+  panSticks.place(null);
+  $('#b-to-plate').disabled = false;
+  chef.say('Tilt it away. Tap your wrist. Let it jump and roll over itself.', 'neutral');
+  caption('Hold TILT, then TAP until it’s a football');
+}
+const tiltBtn = $('#b-tilt');
+const holdOn = e => { e.preventDefault(); S.tiltHeld = true; tiltBtn.classList.add('held'); };
+const holdOff = () => { S.tiltHeld = false; tiltBtn.classList.remove('held'); };
+tiltBtn.addEventListener('pointerdown', holdOn);
+['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => tiltBtn.addEventListener(ev, holdOff));
 $('#b-tap').addEventListener('click', doTap);
 function doTap() {
-  if (S.step !== 'cook' || !S.pan) return;
+  if (S.stage !== 'fold' || !S.pan) return;
   const r = S.pan.tap();
   sound.tap();
-  S.shake = 1;
+  S.kick = 1;
   if (!r.ok) {
-    if (r.why === 'flat') setStatus('*thunk* The pan has to be tilted away from you for the egg to roll.');
+    if (r.why === 'flat') chef.say('Tilt the pan first! It just jumps and falls back.', 'angry');
     return;
   }
-  S.rollKick = 1;
-  if (r.tear > 0.25) setStatus('Rrrip. The skin tore. It was too wet underneath.');
-  else if (r.crease > 0.25) setStatus('It cracked as it folded. The egg is getting firm.');
-  else if (r.R >= 1) setStatus('Rolled into a football. Get it onto the rice.');
-  else setStatus('It folds over itself… keep tapping.');
+  caption('');
+  if (r.tear > 0.25) chef.say('Rrrip. The skin tore. Too wet underneath.', 'shock');
+  else if (r.crease > 0.25) chef.say('It’s cracking. That egg is getting firm.', 'angry');
+  else if (r.R >= 1) { chef.say('A football. Good. Onto the rice, quick.', 'happy'); caption('Now: “Onto the rice”'); }
+  else chef.say(['Again.', 'Good. Again.', 'Keep it rolling.', 'Tap!'][S.pan.rollTaps % 4], 'neutral');
+  $('#m-fold').style.width = Math.round(S.pan.rollR * 100) + '%';
 }
 $('#b-to-plate').addEventListener('click', startPlate);
 
-/* ---------------- 3. Plate ---------------- */
+/* ------------------------------------------------------------------ */
+/* 4. Plate                                                            */
+/* ------------------------------------------------------------------ */
 
 function startPlate() {
   const pan = S.pan;
   S.finalAgg = pan.aggregate();
   S.leftPanAt = S.t;
-  S.step = 'plate';
   pan.setKnob(0);
-  showPanel('plate'); setSteps('plate');
-  if (!plate) plate = new Plate(W, H);
+  holdOff();
+  sound.sizzle(0, 0); sound.hiss(0);
   const R = pan.rollR;
-  S.omeletteSpec = {
-    Lh: 70 * (0.82 + 0.18 * R), r0: lerp(13, 21, R), w0: lerp(56, 30, R),
+  S.spec = {
+    L: 7.0 * (0.86 + 0.14 * R), A: lerp(1.1, 2.2, R),
     dm: S.finalAgg.dm, br: S.finalAgg.br, cu: (pan.stats.atRoll || S.finalAgg).cu,
     tears: pan.tears, creases: pan.creases,
   };
-  plate.omelette = null;
-  plate.update(0);
-  banner('Click on the rice to slide the omelette off');
-  setStatus(R < 0.4 ? 'It never got rolled. It slides off as a flat omelette.' : 'Aim for the middle of the rice.');
-  sound.hiss(0); sound.sizzle(0, 0);
+  iris(() => { setStage('plate'); goView('plate', false); });
+  chef.say(R < 0.4 ? 'That isn’t folded. Put it on the rice anyway.' : 'Seam down, in the middle of the rice.', R < 0.4 ? 'angry' : 'neutral');
+  caption('Click the rice where it should land');
 }
 
-function placeOmelette(x, y) {
-  const [gx, gy] = plate.unproject(x, y);
-  const off = Math.hypot(gx, gy);
-  // Nudge: it can't land beyond the rice edge entirely.
-  const lim = 24;
-  const px = clamp(gx, -lim, lim), py = clamp(gy, -lim, lim);
-  plate.place({ x: px, y: py, ...S.omeletteSpec });
-  S.plateOffset = off;
+function hitPlate(cx, cy) {
+  const ray = world.rayFrom(cx, cy);
+  const o = ray.origin.clone().sub(SETS.plate), d = ray.direction;
+  for (let t = 0; t < 220; t += 0.25) {
+    const x = o.x + d.x * t, y = o.y + d.y * t, z = o.z + d.z * t;
+    if (Math.hypot(x, z) < 20 && y <= surface(x, z)) return V(x, y, z);
+  }
+  return null;
+}
+
+function placeOmelette(p) {
+  S.plateOffset = Math.hypot(p.x, p.z);
+  const lim = 3.2;
+  const x = clamp(p.x, -lim, lim), z = clamp(p.z, -lim, lim);
+  plate3d.showGhost(null);
+  plate3d.place({ x, z, ...S.spec });
   sound.plop();
-  S.step = 'cut-wait';
-  setTimeout(() => {
-    S.step = 'cut';
-    showPanel('cut'); setSteps('cut');
-    banner('Drag the knife along the top, tip to tip');
-    setStatus('One cut only.');
-  }, 650);
+  S.stage = 'placed';
+  caption('');
+  setTimeout(startJudge, 1100);
 }
 
-/* ---------------- 4. Cut & reveal ---------------- */
+/* ------------------------------------------------------------------ */
+/* 5. Judge: the head chef's cut is the reveal                          */
+/* ------------------------------------------------------------------ */
 
-function finishCut() {
-  const path = S.slitPath;
-  S.slitPath = [];
-  if (path.length < 4) return;
-  const o = plate.omelette;
-  const us = [], vs = [];
-  for (const [gx, gy] of path) {
-    const [u, v] = plate.toOmeletteFrame(gx, gy);
-    if (Math.abs(u) < 1.05 && Math.abs(v) < o.w0 + 8) { us.push(clamp(u, -1, 1)); vs.push(v); }
-  }
-  if (us.length < 3) {
-    plate.clearCut();
-    setStatus('You missed the omelette. Cut along the top of it.');
-    return;
-  }
-  const u0 = Math.min(...us), u1 = Math.max(...us);
-  const mv = vs.reduce((a, b) => a + b, 0) / vs.length;
-  const sd = Math.sqrt(vs.reduce((a, b) => a + (b - mv) ** 2, 0) / vs.length);
-  S.slit = { u0, u1, off: mv, offset: mv, wobble: sd, cover: clamp((u1 - u0) / 1.7, 0, 1) };
-  // Carry-over cooking while it sat on the rice.
+function startJudge() {
+  setStage('judge');
+  goView('judge');
   const rest = S.t - S.leftPanAt;
-  S.dmFinal = S.finalAgg.dm + Math.min(0.06, rest * 0.004);
-  plate.omelette.dm = S.dmFinal;
-  plate.cut(S.slit);
-  sound.knife();
-  S.step = 'reveal';
-  S.revealT = 0;
-  banner('');
-  setStatus('…');
-}
-
-function finishTrial() {
-  S.step = 'result';
-  setSteps('done');
-  const res = scoreRun({
+  S.dmFinal = S.finalAgg.dm + Math.min(0.05, rest * 0.003);
+  const om = plate3d.om;
+  plate3d.place({ x: om.x, z: om.z, ...S.spec, dm: S.dmFinal });
+  plate3d.om.drop = 0;
+  S.judgeT = 0;
+  S.reacted = false;
+  chef.say('Stand back. Let’s see what you made.', 'sniff');
+  S.result = scoreRun({
     mix: S.bowl.mixedness(), foam: S.bowl.foamLevel(), shells: S.pan.shellsInEgg,
-    pan: S.pan, plate: { offset: S.plateOffset }, slit: S.slit, dmFinal: S.dmFinal, rolledR: S.pan.rollR,
+    pan: S.pan, plateOffset: S.plateOffset, dmFinal: S.dmFinal, rolledR: S.pan.rollR,
   });
-  S.result = res;
-  showResult(res);
 }
 
-function verdictLine(score) {
-  if (score > 90) return 'Chef Okada nods once. "Start Monday. Bring your own chopsticks."';
-  if (score >= 85) return '"Close. Very close. Come back next week and do it again."';
-  if (score >= 70) return '"You can cook. That wasn\'t this omelette, though."';
-  if (score >= 50) return '"We\'ll keep your application on file."';
-  return '"Have you considered the front of house?"';
+function judgeTick(dt) {
+  S.judgeT += dt;
+  const t = S.judgeT;
+  if (t > 1.0 && !plate3d.om.open) { plate3d.startCut(); setTimeout(() => sound.knife(), 650); }
+  if (t > 3.4 && !S.reacted) {
+    S.reacted = true;
+    const d = S.dmFinal;
+    if (d >= 0.45 && d <= 0.6) chef.say('Look at that. LOOK at it! That’s hanjuku.', 'happy');
+    else if (d < 0.3) chef.say('It’s SOUP! You flooded my plate!', 'shock');
+    else if (d < 0.45) chef.say('Runny. A bit too runny. Close…', 'sniff');
+    else if (d < 0.7) chef.say('Hmph. It opened, but the middle has set.', 'sniff');
+    else chef.say('It’s SOLID. It just split in half! Terrible!', 'angry');
+  }
+  if (t > 6.2 && S.stage === 'judge') showResult(S.result);
+}
+
+function verdictQuote(score) {
+  if (score > 90) return '“You start Monday. Bring your own chopsticks.”';
+  if (score >= 85) return '“Close. Very close. Come back next week.”';
+  if (score >= 70) return '“You can cook. That wasn’t this omelette, though.”';
+  if (score >= 50) return '“We’ll keep your application on file.”';
+  return '“Have you considered washing dishes?”';
 }
 
 function showResult(res) {
+  setStage('result');
   const hired = res.total > 90;
-  $('#r-score').textContent = res.total;
   const st = $('#r-stamp');
-  st.textContent = hired ? 'HIRED' : 'NOT HIRED';
-  st.className = 'stamp ' + (hired ? 'hired' : 'rejected');
-  $('#r-line').textContent = verdictLine(res.total);
-  const rows = $('#r-rows');
-  rows.innerHTML = '';
+  st.textContent = hired ? 'HIRED!' : 'NOT HIRED';
+  st.className = 'stamp boil ' + (hired ? 'hired' : 'fired');
+  const sc = $('#s-result');
+  sc.style.setProperty('--rc1', hired ? '#e2a823' : '#7d241e');
+  sc.style.setProperty('--rc2', hired ? '#d1931a' : '#5e1a15');
+  $('#r-quote').textContent = verdictQuote(res.total);
+  const ul = $('#r-lines');
+  ul.innerHTML = '';
   for (const l of res.lines) {
-    const tr = document.createElement('tr');
-    const a = document.createElement('td'); a.textContent = l.label;
-    const b = document.createElement('td'); b.textContent = `${Math.round(l.pts)}/${l.max}`;
-    const c = document.createElement('td'); c.textContent = l.note;
-    tr.append(a, b, c); rows.appendChild(tr);
+    const li = document.createElement('li');
+    if (l.key === 'inside') li.className = 'key';
+    const b = document.createElement('b'); b.textContent = l.label;
+    const p = document.createElement('span'); p.className = 'p'; p.textContent = `${Math.round(l.pts)}/${l.max}`;
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = l.note;
+    li.append(b, p, n); ul.appendChild(li);
   }
   const su = document.getElementById('share-url');
-  const url = (su && su.dataset.url) || location.origin + '/';
+  const url = (su && su.dataset.url) || location.origin + location.pathname;
   const text = hired
-    ? `I scored ${res.total}/100 on the omurice line-cook trial at Hanjuku-tei and got HIRED 🍳`
-    : `I scored ${res.total}/100 on the omurice line-cook trial at Hanjuku-tei. Not hired 🥲 Can you make the perfect split-open omelette?`;
+    ? `I scored ${res.total}/100 at the Hanjuku-tei omurice trial and got HIRED 🍳 Can you cook the perfect split omelette?`
+    : `I scored ${res.total}/100 at the Hanjuku-tei omurice trial. Not hired 🥲 Can you cook the perfect split omelette?`;
   $('#r-share').href = `https://x.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
-  $('#r-rank').textContent = 'Sending your score to the Hall of Fame…';
+  const el = $('#r-score');
+  const t0 = performance.now();
+  const tick = now => {
+    const k = Math.min(1, (now - t0) / 1100);
+    el.textContent = Math.round(res.total * (1 - (1 - k) ** 3));
+    if (k < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  sc.hidden = false;
   hired ? sound.tada() : sound.fail();
-  setTimeout(() => openWin('win-result'), 300);
+  $('#r-rank').textContent = 'Posting to the Wall of Fame…';
   if (!S.submitted) {
     S.submitted = true;
     const breakdown = Object.fromEntries(res.lines.map(l => [l.key, Math.round(l.pts)]));
-    submitScore({ name: S.name, score: res.total, breakdown }).then(r => {
-      if (r.online && r.rank) $('#r-rank').textContent = `You're #${r.rank} of ${r.of} applicants in the Hall of Fame.`;
-      else if (r.online) $('#r-rank').textContent = 'Score saved to the Hall of Fame.';
-      else $('#r-rank').textContent = 'This score couldn\'t be posted to the Hall of Fame from here. It\'s saved on this computer.';
+    submitScore({ name: S.handle, score: res.total, breakdown }).then(r => {
+      $('#r-rank').textContent = r.online && r.rank ? `You're #${r.rank} of ${r.of} on the Wall of Fame.` : r.online ? 'Posted to the Wall of Fame.' : 'Saved on this device. The Wall of Fame didn’t accept it from here.';
     });
   }
 }
 
-/* ---------------- Leaderboard ---------------- */
+/* ---------------- Wall of Fame ---------------- */
 
-async function loadBoard() {
-  const body = $('#board-rows');
-  body.innerHTML = '<tr><td colspan="4" class="muted">Loading scores…</td></tr>';
+async function loadFame() {
+  const ol = $('#fame-list');
+  ol.innerHTML = '<li class="muted">Loading…</li>';
   const { online, entries } = await fetchBoard();
-  body.innerHTML = '';
-  if (!entries.length) {
-    body.innerHTML = '<tr><td colspan="4" class="muted">No applicants yet. Be the first.</td></tr>';
-  }
+  ol.innerHTML = '';
+  if (!entries.length) ol.innerHTML = '<li class="muted">Nobody yet. Be the first cook on the wall.</li>';
   entries.slice(0, 100).forEach((e, i) => {
-    const tr = document.createElement('tr');
-    if (S.name && e.name.toLowerCase() === S.name.toLowerCase()) tr.className = 'me';
-    const cells = [String(i + 1), e.name, String(e.score), e.score > 90 ? 'HIRED' : 'Not hired'];
-    cells.forEach((c, k) => {
-      const td = document.createElement('td');
-      td.textContent = c;
-      if (k === 0 || k === 2) td.className = 'num';
-      if (k === 3) td.className = e.score > 90 ? 'tag-h' : 'tag-r';
-      tr.appendChild(td);
-    });
-    body.appendChild(tr);
+    const li = document.createElement('li');
+    if (S.handle && e.name.toLowerCase() === S.handle.toLowerCase()) li.className = 'me';
+    const r = document.createElement('span'); r.className = 'rank'; r.textContent = i + 1;
+    const w = document.createElement('span'); w.className = 'who'; w.textContent = '@' + e.name;
+    const p = document.createElement('span'); p.className = 'pts'; p.textContent = e.score;
+    const t = document.createElement('span'); t.className = 'tag ' + (e.score > 90 ? 'h' : 'n'); t.textContent = e.score > 90 ? 'HIRED' : 'NOPE';
+    li.append(r, w, p, t); ol.appendChild(li);
   });
-  $('#board-note').textContent = online ? 'Best score per applicant. Over 90 = hired.' : 'Offline: showing scores from this computer only.';
+  $('#fame-note').textContent = online ? 'Best score per cook. Over 90 means hired.' : 'Offline: scores from this device only.';
 }
-$('#b-board-refresh').addEventListener('click', loadBoard);
 
 /* ------------------------------------------------------------------ */
-/* Input on the canvas                                                 */
+/* Pointer on the 3D view                                              */
 /* ------------------------------------------------------------------ */
 
+const cv = $('#gl');
+function bowlHit(e) {
+  const p = world.hitLocalPlane(e.clientX, e.clientY, bowl3d.group, bowl3d.liquidY());
+  return p ? { p, cell: bowl3d.toCell(p.x, p.z) } : null;
+}
+function panHit(e) {
+  const p = world.hitLocalPlane(e.clientX, e.clientY, pan3d.group, 0.4);
+  return p ? { p, cell: pan3d.localToCell(p.x, p.z, S.pan) } : null;
+}
 cv.addEventListener('pointerdown', e => {
+  if (!world) return;
   sound.init();
   cv.setPointerCapture(e.pointerId);
-  const [x, y] = canvasPt(e);
-  const P = S.pointer;
-  P.x = x; P.y = y; P.down = true; P.vx = 0; P.vy = 0; P.lastT = performance.now(); P.downX = x; P.downY = y;
-  if (S.step === 'beat') {
+  const P = S.ptr;
+  P.down = true; P.last = null; P.lastT = performance.now(); P.vx = P.vy = 0;
+  if (S.stage === 'beat' && S.bowl) {
     const b = S.bowl;
-    const [gx, gy] = toBowl(x, y);
-    if (b.removeShellAt(gx, gy)) {
+    if (b.eggs < 3) { crackEgg(); P.down = false; return; }
+    const h = bowlHit(e);
+    if (h && b.removeShellAt(h.cell[0], h.cell[1])) {
       sound.ding();
-      setStatus(b.shells.length ? 'Got one. There\'s more shell in there.' : 'Shell out. Keep beating.');
-      if (!b.shells.length) $('#shell-warn').hidden = true;
+      chef.say(b.shells.length ? 'There’s more in there.' : 'Good. Now beat.', b.shells.length ? 'sniff' : 'neutral');
       P.down = false;
-      return;
     }
-    if (b.eggs < 3) { crackEgg(x, y); P.down = false; }
-  } else if (S.step === 'plate') {
-    placeOmelette(x, y);
+  } else if (S.stage === 'plate') {
+    const p = hitPlate(e.clientX, e.clientY);
+    if (p) placeOmelette(p);
     P.down = false;
-  } else if (S.step === 'cut') {
-    S.slitPath = [];
-    plate.clearCut();
-    addSlitPoint(x, y);
   }
+  onMove(e);
 });
-cv.addEventListener('pointermove', e => {
-  const [x, y] = canvasPt(e);
-  const P = S.pointer;
+cv.addEventListener('pointermove', onMove);
+const up = () => { S.ptr.down = false; S.ptr.last = null; };
+cv.addEventListener('pointerup', up);
+cv.addEventListener('pointercancel', up);
+cv.addEventListener('pointerleave', () => { up(); bowlSticks && bowlSticks.place(null); panSticks && panSticks.place(null); });
+
+function onMove(e) {
+  if (!world) return;
+  const P = S.ptr;
   const now = performance.now();
   const dt = Math.max(1, now - P.lastT) / 1000;
-  // Smoothed pointer velocity in canvas px/s.
-  P.vx = lerp(P.vx, (x - P.x) / dt, 0.5);
-  P.vy = lerp(P.vy, (y - P.y) / dt, 0.5);
-  const px = P.x, py = P.y;
-  P.x = x; P.y = y; P.lastT = now; P.inside = true;
-  if (!P.down) return;
-  if (S.step === 'beat' && S.bowl.eggs > 0) {
-    const s = bowlCell();
-    // Apply along the segment so fast strokes don't skip.
-    const steps = Math.max(1, Math.ceil(Math.hypot(x - px, y - py) / 10));
-    for (let i = 1; i <= steps; i++) {
-      const [gx, gy] = toBowl(lerp(px, x, i / steps), lerp(py, y, i / steps));
-      S.bowl.whisk(gx, gy, P.vx / s, P.vy / s, dt / steps);
+  if (S.stage === 'beat' && S.bowl && S.bowl.eggs > 0) {
+    const h = bowlHit(e);
+    bowlSticks.place(h && h.p, P.down, S.t);
+    if (h && P.down && P.last) {
+      const [lx, ly] = P.last;
+      P.vx = lerp(P.vx, (h.cell[0] - lx) / dt, 0.5); P.vy = lerp(P.vy, (h.cell[1] - ly) / dt, 0.5);
+      const steps = Math.max(1, Math.ceil(Math.hypot(h.cell[0] - lx, h.cell[1] - ly) / 2));
+      for (let i = 1; i <= steps; i++) S.bowl.whisk(lerp(lx, h.cell[0], i / steps), lerp(ly, h.cell[1], i / steps), P.vx, P.vy, dt / steps);
+      if (Math.random() < 0.25) sound.burst(0.04, 1500 + Math.random() * 1500, 3, 0.08);
     }
-    if (Math.random() < 0.25) sound.burst(0.04, 1500 + Math.random() * 1500, 3, 0.08);
-  } else if (S.step === 'cook' && S.pan.poured) {
-    const s = panCell();
-    const steps = Math.max(1, Math.ceil(Math.hypot(x - px, y - py) / 8));
-    let w = 0;
-    for (let i = 1; i <= steps; i++) {
-      const [gx, gy] = toPan(lerp(px, x, i / steps), lerp(py, y, i / steps));
-      w += S.pan.stir(gx, gy, P.vx / s, P.vy / s, dt / steps);
+    P.last = h ? h.cell : null;
+  } else if (S.stage === 'cook' && S.pan) {
+    const h = panHit(e);
+    panSticks.place(S.pan.poured && h ? h.p : null, P.down, S.t);
+    if (h && P.down && P.last && S.pan.poured) {
+      const [lx, ly] = P.last;
+      P.vx = lerp(P.vx, (h.cell[0] - lx) / dt, 0.5); P.vy = lerp(P.vy, (h.cell[1] - ly) / dt, 0.5);
+      const steps = Math.max(1, Math.ceil(Math.hypot(h.cell[0] - lx, h.cell[1] - ly) / 1.5));
+      let w = 0;
+      for (let i = 1; i <= steps; i++) w += S.pan.stir(lerp(lx, h.cell[0], i / steps), lerp(ly, h.cell[1], i / steps), P.vx, P.vy, dt / steps);
+      if (w > 0 && Math.random() < 0.3) sound.scrape();
     }
-    if (w > 0 && Math.random() < 0.3) sound.scrape();
-  } else if (S.step === 'cut') {
-    addSlitPoint(x, y);
+    P.last = h ? h.cell : null;
+  } else if (S.stage === 'plate') {
+    plate3d.showGhost(hitPlate(e.clientX, e.clientY), S.spec);
   }
-});
-const endPointer = () => {
-  const P = S.pointer;
-  if (P.down && S.step === 'cut') finishCut();
-  P.down = false;
-};
-cv.addEventListener('pointerup', endPointer);
-cv.addEventListener('pointercancel', endPointer);
-cv.addEventListener('pointerleave', () => { S.pointer.inside = false; });
-
-function addSlitPoint(x, y) {
-  const [gx, gy] = plate.unproject(x, y);
-  const prev = S.slitPath[S.slitPath.length - 1];
-  S.slitPath.push([gx, gy]);
-  if (prev) plate.markCut(gx, gy, prev[0], prev[1]); else plate.markCut(gx, gy);
+  P.lastT = now;
 }
 
 document.addEventListener('keydown', e => {
-  if (e.target.closest('input[type=text], input:not([type]), textarea')) return;
-  if (S.step === 'cook') {
-    if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) doTap(); }
-    if (e.code === 'ArrowUp' || e.code === 'KeyW') { e.preventDefault(); S.tiltKey = 1; }
-    if (e.code === 'ArrowDown' || e.code === 'KeyS') { e.preventDefault(); S.tiltKey = -1; }
-    if (/^Digit[0-3]$/.test(e.code)) {
-      const k = +e.code.slice(5);
-      S.pan.setKnob(k);
-      $$('input[name=knob]').forEach(r => (r.checked = +r.value === k));
-    }
+  if (e.target.closest && e.target.closest('input')) return;
+  if (S.stage === 'fold') {
+    if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) { $('#b-tap').classList.add('held'); doTap(); } }
+    if (e.code === 'KeyW' || e.code === 'ArrowUp') { e.preventDefault(); S.tiltHeld = true; tiltBtn.classList.add('held'); }
   }
+  if ((S.stage === 'cook' || S.stage === 'fold') && /^Digit[0-3]$/.test(e.code)) setKnob(+e.code.slice(5));
 });
 document.addEventListener('keyup', e => {
-  if (['ArrowUp', 'KeyW', 'ArrowDown', 'KeyS'].includes(e.code)) S.tiltKey = 0;
+  if (e.code === 'Space') $('#b-tap').classList.remove('held');
+  if (e.code === 'KeyW' || e.code === 'ArrowUp') holdOff();
 });
 
 /* ------------------------------------------------------------------ */
-/* Frame loop                                                          */
+/* Loop                                                                */
 /* ------------------------------------------------------------------ */
 
-let last = performance.now(), acc = 0;
+const zoneArc = (a, b) => {
+  const ang = T => Math.PI - (T / 300) * Math.PI;
+  const p = T => [70 + Math.cos(ang(T)) * 54, 80 - Math.sin(ang(T)) * 54];
+  const [x0, y0] = p(a), [x1, y1] = p(b);
+  return `M${x0.toFixed(1)} ${y0.toFixed(1)} A54 54 0 0 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`;
+};
+$('#zone-good').setAttribute('d', zoneArc(150, 190));
+$('#zone-hot').setAttribute('d', zoneArc(225, 300));
+
+let lastSay = '';
+function chefWatch(pan, agg) {
+  let line = null, mood = 'neutral';
+  if (!pan.poured) {
+    const st = pan.butterState();
+    if (pan.smoke > 0.3) { line = 'Smoke! You’re burning my kitchen down!'; mood = 'angry'; }
+    else if (st === 'burnt') { line = 'Black butter. That’s burnt.'; mood = 'angry'; }
+    else if (st === 'brown') { line = 'Brown butter. Nutty. Wrong.'; mood = 'sniff'; }
+    else if (st === 'foaming') line = 'Foaming. Hear that crackle?';
+    else if (st === 'clear') line = 'Foam’s dying down. Don’t dawdle.';
+    else if (st === 'melting') line = pan.T < 45 ? 'Butter in a cold pan. Turn on the heat.' : 'Melting…';
+    else if (!pan.knob) line = 'The burner is off, cook.';
+    else if (pan.T < 120) line = 'Warming up.';
+    else if (!pan.butter) line = 'Hot pan, no butter?';
+  } else if (pan.pouring) line = 'Pour!';
+  else if (S.stage === 'cook') {
+    if (pan.T < 105) { line = 'No sizzle. The egg is just sitting there.'; mood = 'sniff'; }
+    else if (agg.dm < 0.14) line = agg.cu > 0.15 ? 'Keep scrambling! Little curds!' : 'Stir! Stir now!';
+    else if (agg.dm < 0.32) line = agg.cu > 0.2 ? 'Good curds. Top still wet.' : 'You’re not stirring. Stir!';
+    else if (agg.dm < 0.45) line = 'Wet scrambled egg. Stop stirring, let the skin set. Then fold.';
+    else if (agg.dm < 0.58) { line = 'It’s setting. Fold it NOW.'; mood = 'shock'; }
+    else { line = 'Too long! It’s cooking through!'; mood = 'angry'; }
+  } else if (S.stage === 'fold' && agg.dm > 0.62 && pan.rollR < 1) { line = 'Hurry, it’s cooking through!'; mood = 'angry'; }
+  if (line && line !== lastSay) { lastSay = line; chef.say(line, mood); }
+}
+
+let last = performance.now(), acc = 0, firstFrame = true;
 const DT = 1 / 60;
 function frame(now) {
   const el = Math.min(0.1, (now - last) / 1000);
@@ -555,326 +587,53 @@ function frame(now) {
   let n = 0;
   while (acc >= DT && n < 4) { update(DT); acc -= DT; n++; }
   if (n === 4) acc = 0;
-  draw();
+  if (world) {
+    world.update(el);
+    world.render();
+    if (firstFrame) { firstFrame = false; $('#loading').hidden = true; }
+  }
   requestAnimationFrame(frame);
 }
 
-let lastStatusKey = '';
 function update(dt) {
   S.t += dt;
-  wisps.step(dt);
-  if (S.step === 'beat' && S.bowl) {
+  if (!world) return;
+  const st = S.stage;
+  if (st === 'beat' && S.bowl) {
     S.bowl.step(dt);
-    if (S.bowl.eggs === 3) {
-      const m = S.bowl.mixedness();
-      $('#m-mix i').style.width = Math.round(m * 100) + '%';
-    }
+    bowl3d.update(S.bowl, S.t, dt);
+    if (S.bowl.eggs === 3) $('#m-mix').style.width = Math.round(S.bowl.mixedness() * 100) + '%';
   }
-  if ((S.step === 'cook' || S.step === 'plate') && S.pan) {
-    const pan = S.pan;
-    if (S.tiltKey) {
-      pan.tiltY = clamp(pan.tiltY + S.tiltKey * dt * 2.2, 0, 1);
-      tiltIn.value = Math.round(pan.tiltY * 100);
-    }
-    if (S.step === 'cook') pan.step(dt);
-    S.rollAnim += (pan.rollR - S.rollAnim) * Math.min(1, dt * 9);
-    S.rollKick = Math.max(0, S.rollKick - dt * 4);
-    S.shake = Math.max(0, S.shake - dt * 6);
-    // Sizzle: loud on a hot pan with wet egg or water in the butter.
-    const agg = pan._lastAgg || { mass: 0, dm: 0, cover: 0 };
+  const pan = S.pan;
+  if ((st === 'cook' || st === 'fold') && pan) {
+    const target = st === 'fold' && S.tiltHeld ? 0.75 : 0;
+    pan.tiltY += (target - pan.tiltY) * Math.min(1, dt * 7);
+    pan.step(dt);
+    S.roll += (pan.rollR - S.roll) * Math.min(1, dt * 8);
+    S.kick = Math.max(0, S.kick - dt * 5);
+    const kick = Math.sin(S.kick * Math.PI) * S.kick;
+    stove.update(S.t, pan.knob);
+    pan3d.update(pan, S.t, dt, { roll: S.roll, kick });
+    const agg = pan._lastAgg || { mass: 0, dm: 0, cover: 0, cu: 0 };
     const wet = pan.poured ? agg.cover * (1 - sstep(0.4, 1, agg.dm)) * 1.1 + 0.15 : pan.butter && pan.butterMelt > 0.3 ? pan.butterWater * 0.9 + 0.15 : 0;
     const heat = sstep(95, 190, pan.T);
-    if (S.step === 'cook') {
-      sound.sizzle(wet * heat, pan.butterState() === 'foaming' ? 0.4 : heat * wet * 0.4);
-      sound.hiss(pan.knob ? 0.3 + pan.knob * 0.25 : 0);
-    }
-    // Steam and smoke.
-    if (pan.poured && pan.T > 105 && Math.random() < 0.5 * heat) wisps.emit(PANG.cx, PANG.cy, 'steam', 1, 110);
-    if (pan.smoke > 0 && Math.random() < pan.smoke) wisps.emit(PANG.cx, PANG.cy, 'smoke', 1, 60);
-    if (S.step === 'cook') {
-      // Readouts.
-      const lcd = $('#lcd-t');
-      const T = Math.round(pan.T);
-      if (lcd.textContent !== String(T)) lcd.textContent = T;
-      const box = lcd.parentElement;
-      box.classList.toggle('hot', pan.T > 195 && pan.T <= 225);
-      box.classList.toggle('burn', pan.T > 225);
-      $('#cook-t').textContent = pan.cookTime().toFixed(1) + ' s';
-      const key = statusFor(pan, agg);
-      if (key && key !== lastStatusKey) { lastStatusKey = key; setStatus(key); }
-    }
+    sound.sizzle(wet * heat, pan.butterState() === 'foaming' ? 0.4 : heat * wet * 0.4);
+    sound.hiss(pan.knob ? 0.3 + pan.knob * 0.25 : 0);
+    const T = Math.round(pan.T);
+    const tEl = $('#temp');
+    if (tEl.textContent !== String(T)) tEl.textContent = T;
+    $('#needle').style.transform = `rotate(${-90 + clamp(pan.T / 300, 0, 1) * 180}deg)`;
+    const ct = pan.cookTime().toFixed(1) + 's';
+    $('#cook-t').textContent = ct; $('#cook-t2').textContent = ct;
+    chefWatch(pan, agg);
   }
-  if (S.step === 'plate' || S.step === 'cut' || S.step === 'cut-wait' || S.step === 'reveal' || S.step === 'result') {
-    plate.update(dt);
-    if (S.step === 'reveal') {
-      S.revealT += dt;
-      if (S.revealT > 4.2) finishTrial();
-    }
-  }
+  if (plate3d && plate3d.om && (st === 'placed' || st === 'judge' || st === 'result' || st === 'plate')) plate3d.update(dt);
+  if (st === 'judge') judgeTick(dt);
 }
 
-// What the cook would notice right now: sight, sound, smell.
-function statusFor(pan, agg) {
-  if (!pan.poured) {
-    const st = pan.butterState();
-    if (pan.smoke > 0.3) return 'Smoke is coming off the pan!';
-    if (st === 'burnt') return 'The butter has burnt black.';
-    if (st === 'brown') return 'The butter is turning brown and smells nutty.';
-    if (st === 'foaming') return 'The butter is foaming and crackling.';
-    if (st === 'clear' && pan.butterBrown < 0.1) return 'The foam is dying down. The butter has gone clear.';
-    if (st === 'melting') return pan.T < 40 ? 'The butter is just sitting there. The pan is cold.' : 'The butter is melting.';
-    if (st === 'melted') return 'Melted butter, but no sizzle yet.';
-    if (!pan.knob) return pan.T > 60 ? 'Burner off. The pan is cooling.' : 'Burner is off. The pan is cold.';
-    if (pan.T < 100) return 'The pan is warming up.';
-    if (pan.T < 170) return 'The pan is getting hot.';
-    if (pan.T < 230) return 'The pan is very hot.';
-    return 'The pan is ripping hot.';
-  }
-  if (pan.pouring) return 'Pouring…';
-  if (pan.rolling) return null;
-  if (pan.T < 105) return 'No sizzle. The egg is just sitting in a warm pan.';
-  if (agg.dm < 0.12) return 'Raw egg, sizzling at the edges.';
-  if (agg.dm < 0.3) return agg.cu > 0.2 ? 'Soft curds forming. Top still very wet.' : 'Bottom is setting. Top is still raw.';
-  if (agg.dm < 0.45) return 'Like wet scrambled egg. The bottom is setting into a skin.';
-  if (agg.dm < 0.6) return 'Set underneath, glossy and soft on top.';
-  if (agg.dm < 0.78) return 'The top has nearly set.';
-  return 'It\'s cooked through and getting rubbery.';
-}
-
-/* ------------------------------------------------------------------ */
-/* Drawing                                                             */
-/* ------------------------------------------------------------------ */
-
-function draw() {
-  if (S.step === 'idle') return drawIdle();
-  if (S.step === 'beat') return drawBeat();
-  if (S.step === 'cook') return drawCook();
-  return drawPlate();
-}
-
-function drawIdle() {
-  drawStoveBackground(ctx, W, H, S.t);
-  ctx.fillStyle = 'rgba(0,0,0,0.25)';
-  ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = '#ffd23f';
-  ctx.font = '600 44px "Pixelify Sans", Tahoma, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('OMURICE.EXE', W / 2, H / 2 - 10);
-  ctx.fillStyle = '#ddd';
-  ctx.font = '16px Tahoma, sans-serif';
-  ctx.fillText('Hanjuku-tei line cook trial', W / 2, H / 2 + 22);
-  ctx.textAlign = 'start';
-}
-
-function drawCounter() {
-  const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#6b5a45'); g.addColorStop(1, '#4a3d2e');
-  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-  // Butcher block strips.
-  for (let x = 0; x < W; x += 46) {
-    ctx.fillStyle = (x / 46) % 2 ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.05)';
-    ctx.fillRect(x, 0, 46, H);
-  }
-}
-
-function drawBeat() {
-  const b = S.bowl;
-  drawCounter();
-  const { cx, cy, r } = BOWL;
-  // Bowl: white ceramic with a blue band.
-  ctx.fillStyle = 'rgba(0,0,0,0.35)';
-  ctx.beginPath(); ctx.ellipse(cx + 8, cy + 14, r * 1.02, r * 1.02, 0, 0, Math.PI * 2); ctx.fill();
-  const bg = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.35, r * 0.1, cx, cy, r);
-  bg.addColorStop(0, '#ffffff'); bg.addColorStop(0.8, '#e9e9e4'); bg.addColorStop(1, '#bdbdb5');
-  ctx.fillStyle = bg;
-  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = '#2e4fa8'; ctx.lineWidth = 5;
-  ctx.beginPath(); ctx.arc(cx, cy, r - 9, 0, Math.PI * 2); ctx.stroke();
-  const ig = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, r * 0.88);
-  ig.addColorStop(0, '#f4f2ea'); ig.addColorStop(1, '#cfcdc4');
-  ctx.fillStyle = ig;
-  ctx.beginPath(); ctx.arc(cx, cy, r * 0.88, 0, Math.PI * 2); ctx.fill();
-  if (b.eggs > 0) {
-    // Liquid surface.
-    const N = BN;
-    const h = new Float32Array(N * N);
-    const yk = new Float32Array(N * N);
-    for (let k = 0; k < h.length; k++) {
-      if (!b.mask[k]) continue;
-      h[k] = 6 + b.foam[k] * 0.6;
-      yk[k] = b.yk[k] * b.norm;
-    }
-    // Intact yolks stand up as domes.
-    for (const Y of b.yolks) {
-      if (Y.intact <= 0) continue;
-      for (let j = Math.floor(Y.y - Y.r); j <= Math.ceil(Y.y + Y.r); j++) for (let i = Math.floor(Y.x - Y.r); i <= Math.ceil(Y.x + Y.r); i++) {
-        const d = Math.hypot(i - Y.x, j - Y.y);
-        if (d < Y.r && b.mask[j * N + i]) h[j * N + i] += Math.sqrt(1 - (d / Y.r) ** 2) * 4 * Y.intact;
-      }
-    }
-    const img = surface.draw({ N, h, yk }, { relief: 1.2 });
-    const s = bowlCell();
-    const half = ((N - 1) / 2) * s;
-    ctx.save();
-    ctx.beginPath(); ctx.arc(cx, cy, b.R * s - 2, 0, Math.PI * 2); ctx.clip();
-    ctx.drawImage(img, cx - half, cy - half, (N - 1) * s, (N - 1) * s);
-    // Foam: little bubbles wherever it was whipped hard.
-    ctx.fillStyle = 'rgba(255,255,250,0.55)';
-    for (let i = 0; i < 700; i++) {
-      const gx = hash(i) * N, gy = hash(i + 1000) * N;
-      const f = b.foam[(gy | 0) * N + (gx | 0)];
-      if (!f || hash(i + 2000) > f * 3) continue;
-      ctx.beginPath(); ctx.arc(cx + (gx - (N - 1) / 2) * s, cy + (gy - (N - 1) / 2) * s, 1.2 + hash(i + 3000) * 2.2, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.restore();
-    // Shell fragments.
-    for (const sh of b.shells) {
-      const x = cx + (sh.x - (N - 1) / 2) * s, y = cy + (sh.y - (N - 1) / 2) * s;
-      ctx.save(); ctx.translate(x, y); ctx.rotate(sh.rot);
-      ctx.fillStyle = '#f7efe2'; ctx.strokeStyle = '#a89a83'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(-9, -4); ctx.lineTo(3, -8); ctx.lineTo(10, -1); ctx.lineTo(4, 7); ctx.lineTo(-7, 5); ctx.closePath();
-      ctx.fill(); ctx.stroke();
-      ctx.restore();
-    }
-  } else {
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.font = '15px Tahoma, sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText('Click the bowl to crack an egg', cx, cy);
-    ctx.textAlign = 'start';
-  }
-  // Chopsticks follow the pointer.
-  if (S.pointer.inside && b.eggs > 0) drawChopsticks(S.pointer.x, S.pointer.y, S.pointer.down);
-}
-
-function drawChopsticks(x, y, down) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(-0.7);
-  for (const o of [-5, 5]) {
-    const g = ctx.createLinearGradient(0, o - 3, 0, o + 3);
-    g.addColorStop(0, '#d8b07a'); g.addColorStop(1, '#9c7041');
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.moveTo(0, o * (down ? 0.4 : 1) - 2); ctx.lineTo(260, o * 2.4 - 4); ctx.lineTo(260, o * 2.4 + 4); ctx.lineTo(0, o * (down ? 0.4 : 1) + 2);
-    ctx.closePath(); ctx.fill();
-  }
-  ctx.restore();
-}
-
-function drawCook() {
-  const pan = S.pan;
-  drawStoveBackground(ctx, W, H, S.t);
-  const { cx, r } = PANG;
-  const shake = S.shake * Math.sin(S.t * 80) * 3;
-  const cy = PANG.cy - pan.tiltY * 10 + shake;
-  drawBurner(ctx, cx, PANG.cy + 6, r * 1.05, pan.knob, S.t);
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.scale(1, panSquash());
-  ctx.translate(-cx, -cy);
-  drawPan(ctx, cx, cy, r, pan.tiltY, pan.T);
-  const s = panCell();
-  drawButter(ctx, pan, cx, cy, s / 4.8, S.t);
-  if (pan.poured) {
-    const img = surface.draw(pan, { time: S.t });
-    const N = pan.N;
-    const half = pan.c * s;
-    ctx.save();
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.clip();
-    if (pan.rolling) {
-      // Only the part not yet rolled stays flat; the log sits on top.
-      const a = pan.stats.atRoll;
-      const jLog = pan.c - pan.R * 0.52;
-      const jStart = Math.min(a.maxJ, pan.c + pan.R * 0.8);
-      const jCut = lerp(jStart, jLog, S.rollAnim);
-      const yCut = cy + (jCut - pan.c) * s;
-      ctx.beginPath(); ctx.rect(cx - r, cy - r, r * 2, yCut - (cy - r)); ctx.clip();
-      ctx.globalAlpha = 1 - S.rollAnim * 0.85;
-      ctx.drawImage(img, cx - half, cy - half, (N - 1) * s, (N - 1) * s);
-      ctx.globalAlpha = 1;
-      ctx.restore();
-      ctx.save();
-      const chord = 2 * Math.sqrt(Math.max(0, pan.R ** 2 - (jCut - pan.c) ** 2)) * s;
-      const len = Math.min(chord * 0.86, r * 1.5) * (0.6 + 0.4 * Math.min(1, S.rollAnim * 1.6));
-      const rad = lerp(8, 54, Math.sqrt(S.rollAnim));
-      const agg = pan._lastAgg || pan.aggregate();
-      const br = clamp(agg.br, 0, 1);
-      const ext = { r: Math.round(lerp(252, 190, br)), g: Math.round(lerp(222, 130, br)), b: Math.round(lerp(110, 55, br)) };
-      drawLog(ctx, cx, yCut - S.rollKick * 6, len, rad, ext, pan.tears, pan.creases, S.rollAnim * 3 + S.rollKick, S.t);
-    } else {
-      ctx.drawImage(img, cx - half, cy - half, (N - 1) * s, (N - 1) * s);
-    }
-    ctx.restore();
-  }
-  ctx.restore();
-  // Pour stream from the bowl.
-  if (pan.pouring) {
-    const px = cx + (pan.pourX - pan.c) * s, py = cy + (pan.pourY - pan.c) * s;
-    const g = ctx.createLinearGradient(px, 0, px + 12, 0);
-    g.addColorStop(0, 'rgba(250,180,40,0.9)'); g.addColorStop(1, 'rgba(255,215,90,0.9)');
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.moveTo(px - 4, 0); ctx.quadraticCurveTo(px - 8 + Math.sin(S.t * 20) * 2, py * 0.5, px - 6, py);
-    ctx.lineTo(px + 6, py); ctx.quadraticCurveTo(px + 8, py * 0.5, px + 10, 0); ctx.fill();
-  }
-  wisps.draw(ctx);
-  if (S.pointer.inside && pan.poured && !pan.rolling) drawChopsticks(S.pointer.x, S.pointer.y, S.pointer.down);
-}
-
-function drawPlate() {
-  plate.render(ctx);
-  if (S.step === 'plate' && S.pointer.inside) {
-    // Ghost of where it'll land.
-    const [gx, gy] = plate.unproject(S.pointer.x, S.pointer.y);
-    const sp = S.omeletteSpec;
-    ctx.save();
-    ctx.globalAlpha = 0.45;
-    ctx.fillStyle = '#ffe27a';
-    ctx.strokeStyle = '#000'; ctx.setLineDash([4, 3]);
-    ctx.beginPath();
-    for (let i = 0; i <= 40; i++) {
-      const a = (i / 40) * Math.PI * 2;
-      const u = Math.cos(a), v = Math.sin(a) * sp.w0 * Math.pow(Math.max(0, 1 - u * u), 0.27);
-      const [x, y] = plate.project(gx + u * sp.Lh, gy + v, plate.heightAt(gx + u * sp.Lh, gy + v) + 8);
-      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-    }
-    ctx.fill(); ctx.stroke();
-    ctx.restore();
-  }
-  if (S.step === 'cut' && plate.omelette && S.pointer.inside) drawKnife(S.pointer.x, S.pointer.y);
-  // Steam off a fresh omelette.
-  if (plate.omelette && Math.random() < 0.15) {
-    const [x, y] = plate.project(plate.omelette.x, plate.omelette.y, 60);
-    wisps.emit(x, y, 'steam', 1, 40);
-  }
-  wisps.draw(ctx);
-}
-
-function drawKnife(x, y) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(-0.35);
-  // Blade.
-  const g = ctx.createLinearGradient(0, -14, 0, 4);
-  g.addColorStop(0, '#f4f6f8'); g.addColorStop(0.6, '#b9c0c7'); g.addColorStop(1, '#7c858e');
-  ctx.fillStyle = g;
-  ctx.beginPath();
-  ctx.moveTo(0, 0); ctx.lineTo(130, -6); ctx.lineTo(130, -24); ctx.quadraticCurveTo(40, -24, 0, 0); ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1; ctx.stroke();
-  // Handle.
-  ctx.fillStyle = '#2b1d14';
-  roundRect(ctx, 128, -22, 80, 16, 5); ctx.fill();
-  ctx.fillStyle = '#c9c9c9';
-  ctx.fillRect(150, -16, 4, 4); ctx.fillRect(180, -16, 4, 4);
-  ctx.restore();
-}
-
-/* ------------------------------------------------------------------ */
-
-// Handy for poking at the game from the browser console.
-window.__omu = { S, get plate() { return plate; }, startPlate, placeOmelette, finishCut };
-
-newTrial();
+setStage('beat');
 requestAnimationFrame(frame);
-// Preload the board quietly so the first open is fast.
 fetchBoard();
+
+// For poking at the game from the console.
+window.__omu = { hitPlate, tick(sec) { for (let i = 0; i < sec * 60; i++) update(DT); }, S, get world() { return world; }, plate3d, pan3d, bowl3d, startPlate, startJudge, startFold, placeOmelette, showResult, setStage, goView, setKnob };

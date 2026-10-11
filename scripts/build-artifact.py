@@ -15,4 +15,5 @@ if share:
 page = f'{title}\n<style>\n{css}\n</style>\n{fonts}\n{body}'
 (out / 'index.html').write_text(page)
 shutil.copytree(root / 'js', out / 'js', dirs_exist_ok=True)
+shutil.copytree(root / 'vendor', out / 'vendor', dirs_exist_ok=True)
 print('built', out)

@@ -60,7 +60,7 @@ export class Flow {
           const up = d > 0 ? k : k + 1;
           const hu = h[up] - hmin;
           if (hu > 0) {
-            const f = Math.min(K * mob[up] * hu * dt, 0.12) * d;
+            const f = Math.min(K * mob[up] * hu * dt, 0.2) * d;
             fx[k] = f;
             if (f > 0) out[k] += f; else out[k + 1] -= f;
           }
@@ -70,7 +70,7 @@ export class Flow {
           const up = d > 0 ? k : k + W;
           const hu = h[up] - hmin;
           if (hu > 0) {
-            const f = Math.min(K * mob[up] * hu * dt, 0.12) * d;
+            const f = Math.min(K * mob[up] * hu * dt, 0.2) * d;
             fy[k] = f;
             if (f > 0) out[k] += f; else out[k + W] -= f;
           }
@@ -565,7 +565,7 @@ export class Pan {
         const k = j * N + i;
         z[k] = zb[k] + (i - this.c) * tx + (j - this.c) * ty;
       }
-      const sub = 4, sdt = dt / sub;
+      const sub = 8, sdt = dt / sub;
       for (let s2 = 0; s2 < sub; s2++) this.flow.step(h, z, mob, mask, [dm, cu, yk, br], sdt, 9, 0.9);
     }
   }
@@ -585,105 +585,89 @@ const band = (x, lo, hi, soft) => {
 };
 
 export function scoreRun(r) {
-  // r: { mix, foam, shells, pan (Pan), plate:{offset}, slit:{cover, offset, wobble}, dmFinal, rolledR }
+  // r: { mix, foam, shells, pan, plateOffset (cm), dmFinal, rolledR }
   const lines = [];
-  const add = (key, label, pts, max, note) => lines.push({ key, label, pts: Math.round(pts * 10) / 10, max, note });
+  const add = (key, label, pts, max, note) => lines.push({ key, label, pts: Math.round(clamp(pts, 0, max) * 10) / 10, max, note });
+  const pan = r.pan, bp = pan.stats.butterAtPour || { g: 0, state: 'none', brown: 0 };
+  const atRoll = pan.stats.atRoll || pan.aggregate();
 
-  // 1. Prep: beaten until no streaks of white.
+  // The inside is what the dish is about: 45 points.
+  const d = r.dmFinal;
+  {
+    let p;
+    if (d >= 0.45 && d <= 0.6) p = 45;
+    else if (d > 0.6) p = 45 * (1 - sstep(0.6, 0.84, d));
+    else p = 45 * (1 - sstep(0.45, 0.2, d));
+    let note;
+    if (d < 0.25) note = 'Raw. It ran straight off the rice and flooded the plate.';
+    else if (d < 0.38) note = 'Too wet. Thin egg ran down the rice and pooled on the plate.';
+    else if (d < 0.45) note = 'Slightly loose, a little ran off. Very close.';
+    else if (d <= 0.6) note = 'Golden, glossy, custardy. It slid open and coated the rice. Perfect hanjuku.';
+    else if (d < 0.7) note = 'A touch overcooked. It opened, but the centre had already set.';
+    else if (d < 0.82) note = 'Overcooked. Pale and firm inside, it barely flowed.';
+    else note = 'Cooked solid. It just split in two. That is not omurice.';
+    add('inside', 'The inside', p, 45, note);
+  }
+  // Prep.
   {
     let p = 5 * sstep(0.55, 0.93, r.mix);
-    let note = r.mix > 0.93 ? 'Beaten smooth. No streaks of white.' : r.mix > 0.75 ? 'A few streaks of white still in there.' : 'Barely beaten. You can see the whites.';
+    let note = r.mix > 0.93 ? 'Beaten smooth.' : r.mix > 0.75 ? 'Streaks of white left in.' : 'Barely beaten. You can see the whites.';
     if (r.foam > 0.35) { p -= 1; note += ' Too much air whipped in.'; }
-    if (r.shells > 0) { p -= 2 * r.shells; note += ` Crunch. ${r.shells > 1 ? 'Shell pieces' : 'A piece of shell'} went into the pan.`; }
-    add('prep', 'Egg prep', Math.max(0, p), 5, note);
+    if (r.shells > 0) { p -= 2 * r.shells; note += ` Crunch. ${r.shells > 1 ? 'Shell pieces' : 'A piece of shell'} in the pan.`; }
+    add('prep', 'Beating', p, 5, note);
   }
-  const pan = r.pan, bp = pan.stats.butterAtPour || { g: 0, state: 'none', brown: 0 };
-  // 2. Heat & butter.
+  // Heat & butter.
   {
     const T = pan.stats.pourTemp ?? 20;
+    const band = (x, lo, hi, soft) => (x >= lo && x <= hi ? 1 : clamp(1 - (x < lo ? lo - x : x - hi) / soft, 0, 1));
     let p = 6 * band(T, 150, 190, 45);
-    let note;
-    if (T < 110) note = `Pan was cold (${Math.round(T)}°C) when the egg went in. It stewed instead of sizzling.`;
-    else if (T < 150) note = `A little cool at ${Math.round(T)}°C. Wait for the butter to foam.`;
-    else if (T <= 190) note = `Pan at ${Math.round(T)}°C. Good sizzle.`;
-    else note = `Pan was scorching (${Math.round(T)}°C) when the egg went in.`;
+    let note = T < 110 ? `Cold pan (${Math.round(T)}°C). The egg stewed.` : T < 150 ? `A little cool at ${Math.round(T)}°C.` : T <= 190 ? `Pan at ${Math.round(T)}°C. Good sizzle.` : `Scorching pan (${Math.round(T)}°C).`;
     let b = 0;
     if (bp.g >= 10 && bp.g <= 20) b += 2; else if (bp.g > 0) b += 1;
     if (bp.state === 'foaming' || bp.state === 'clear') b += 2;
     else if (bp.state === 'melted' || bp.state === 'melting') b += 1;
     if (bp.state === 'brown') b -= 0.5;
     if (bp.state === 'burnt') b -= 2;
-    if (bp.g === 0) note += ' No butter at all.';
-    else if (bp.state === 'burnt') note += ' The butter was burnt black.';
-    else if (bp.state === 'brown') note += ' The butter had browned. Nutty, but wrong for this dish.';
-    else if (bp.state === 'foaming') note += ' Butter foaming. Right moment.';
-    else if (bp.state === 'melting') note += ' Butter not even melted yet.';
-    add('heat', 'Heat & butter', clamp(p + b, 0, 10), 10, note);
+    if (bp.g === 0) note += ' No butter.';
+    else if (bp.state === 'burnt') note += ' Burnt butter.';
+    else if (bp.state === 'brown') note += ' The butter had browned.';
+    else if (bp.state === 'foaming') note += ' Poured on foaming butter.';
+    add('heat', 'Heat & butter', p + b, 10, note);
   }
-  const atRoll = pan.stats.atRoll || pan.aggregate();
-  // 3. Curds: stirred hard early, then left alone.
+  // Curds.
   {
+    const band = (x, lo, hi, soft) => (x >= lo && x <= hi ? 1 : clamp(1 - (x < lo ? lo - x : x - hi) / soft, 0, 1));
     const cuQ = band(atRoll.cu, 0.3, 0.85, 0.3);
     const early = sstep(0.4, 2.2, pan.stats.stirEarly + pan.stats.stirMid * 0.6);
-    let p = 15 * (0.55 * cuQ + 0.45 * early);
-    p -= 15 * 0.5 * sstep(0.3, 2.0, pan.stats.stirLate);
-    let note;
-    if (atRoll.cu < 0.12) note = 'You never scrambled it. It cooked as a flat sheet, not a soft, fluffy body.';
-    else if (pan.stats.stirLate > 1.0) note = 'You kept stirring after it began to set and broke the skin.';
-    else if (atRoll.cu < 0.3) note = 'Not enough stirring. The curds are big and uneven.';
-    else note = 'Small, soft curds all the way through.';
-    add('curds', 'Curd texture', clamp(p, 0, 15), 15, note);
+    let p = 10 * (0.55 * cuQ + 0.45 * early) - 5 * sstep(0.3, 2.0, pan.stats.stirLate);
+    const note = atRoll.cu < 0.12 ? 'Never scrambled. A flat sheet, not soft curds.' : pan.stats.stirLate > 1.0 ? 'Kept stirring after it set and broke the skin.' : atRoll.cu < 0.3 ? 'Big, uneven curds.' : 'Small, soft curds.';
+    add('curds', 'Scramble', p, 10, note);
   }
-  // 4. Exterior colour: should be pale yellow, no brown.
+  // Outside colour.
   {
     const brF = pan.aggregate().br;
-    const p = 15 * (1 - sstep(0.04, 0.45, brF));
-    const note = brF < 0.06 ? 'Pale, smooth and yellow. No browning.' : brF < 0.2 ? 'Some light browning on the outside.' : brF < 0.45 ? 'Brown patches. Heat was too high, or it sat too long.' : 'The outside is browned like a pancake.';
-    add('color', 'Outside colour', p, 15, note);
+    const p = 10 * (1 - sstep(0.04, 0.45, brF));
+    const note = brF < 0.06 ? 'Pale yellow outside. No browning.' : brF < 0.2 ? 'Light browning on the outside.' : brF < 0.45 ? 'Brown patches outside.' : 'Browned like a pancake.';
+    add('color', 'Outside colour', p, 10, note);
   }
-  // 5. Roll & shape.
+  // The fold.
   {
     const R = r.rolledR;
-    let p = 15 * (0.5 * sstep(0.4, 1, R) + 0.5);
-    p -= Math.min(7, pan.tears * 4.5);
-    p -= Math.min(5, pan.creases * 4);
+    let p = 15 * (0.5 * sstep(0.4, 1, R) + 0.5) - Math.min(7, pan.tears * 4.5) - Math.min(5, pan.creases * 4);
     if (R < 0.4) p = Math.min(p, 4);
-    let note;
-    if (R < 0.4) note = 'Never rolled. A flat omelette slid onto the rice.';
-    else if (R < 0.99) note = 'Half rolled. The shape is lopsided.';
-    else note = 'Rolled into a neat football shape.';
-    if (pan.tears > 0.6) note += ' The skin tore while rolling.';
-    else if (pan.tears > 0.25) note += ' A small tear in the skin.';
-    if (pan.creases > 0.4) note += ' It cracked as it folded. Too firm.';
-    add('roll', 'Roll & shape', clamp(p, 0, 15), 15, note);
+    let note = R < 0.4 ? 'Never folded. It went on the rice flat.' : R < 0.99 ? 'Half folded. Lopsided.' : 'Tapped into a neat football.';
+    if (pan.tears > 0.6) note += ' The skin tore.'; else if (pan.tears > 0.25) note += ' A small tear.';
+    if (pan.creases > 0.4) note += ' It cracked as it folded.';
+    add('fold', 'The fold', p, 15, note);
   }
-  // 6. Inside: the hanjuku centre.
+  // Placement.
   {
-    const d = r.dmFinal;
-    const p = 25 * band(d, 0.46, 0.62, 0.22);
-    let note;
-    if (d < 0.28) note = 'Raw inside. It flooded the plate.';
-    else if (d < 0.46) note = 'Inside is a bit runny. Close, but it ran off the rice.';
-    else if (d <= 0.62) note = 'Creamy, custardy centre. Exactly hanjuku.';
-    else if (d < 0.78) note = 'Overcooked a little. It opened, but the centre has set.';
-    else note = 'Fully cooked through. It just splits instead of flowing.';
-    add('inside', 'Hanjuku centre', p, 25, note);
+    const off = r.plateOffset;
+    add('plate', 'Placement', 5 * (1 - sstep(0.5, 3.5, off)), 5, off < 0.8 ? 'Dead centre on the rice.' : off < 2 ? 'Slightly off centre.' : 'Off to the side.');
   }
-  // 7. Plating.
-  {
-    const off = r.plate.offset; // mm from rice centre
-    const p = 5 * (1 - sstep(4, 30, off));
-    add('plate', 'Placement', p, 5, off < 6 ? 'Right on top of the rice.' : off < 18 ? 'A little off centre.' : 'Landed off the rice.');
-  }
-  // 8. The cut.
-  {
-    const s = r.slit;
-    const centred = 1 - sstep(2, 12, Math.abs(s.offset)) * 0.7 - sstep(1.5, 8, s.wobble) * 0.3;
-    const p = 5 * s.cover + 5 * clamp(centred, 0, 1) * (s.cover > 0.2 ? 1 : 0);
-    let note = s.cover > 0.85 ? 'Clean slit end to end' : s.cover > 0.5 ? 'The cut stopped short' : 'Barely cut it';
-    note += Math.abs(s.offset) < 4 ? ', straight down the middle.' : ', off the centre line.';
-    add('slit', 'The cut', clamp(p, 0, 10), 10, note);
-  }
-  const total = Math.round(lines.reduce((s, l) => s + l.pts, 0));
+  let total = Math.round(lines.reduce((s2, l) => s2 + l.pts, 0));
+  // A solid egg can't pass, however good the rest was.
+  if (d >= 0.82) total = Math.min(total, 55);
+  if (d < 0.25) total = Math.min(total, 60);
   return { total: clamp(total, 0, 100), lines };
 }
