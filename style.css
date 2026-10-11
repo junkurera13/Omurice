@@ -199,21 +199,60 @@ kbd { font: 11px var(--type); border: 2px solid currentColor; border-radius: 4px
   position: relative; z-index: 1; background: var(--paper); color: var(--ink); border: 5px solid var(--ink);
   border-radius: 26px 34px 24px 30px; box-shadow: 10px 10px 0 var(--ink); padding: 22px 24px; max-width: 560px; width: 100%;
 }
-.title-card { text-align: center; transform: rotate(-1deg); }
+.title-card { text-align: center; transform: rotate(-1deg); container-type: inline-size; max-width: 640px; padding: 32px 40px 34px; }
+/* Chef Okada stands at the card's left edge, talking; the form sits to his right. */
+.apply-row { display: grid; grid-template-columns: auto auto; justify-content: center; align-items: end; column-gap: 48px; margin: 4px 0 8px; position: relative; left: 18px; }
+.chef-col { display: flex; flex-direction: column; align-items: flex-start; }
+.apply-row .chef-wrap { width: 128px; height: 140px; }
+.apply-col { display: flex; flex-direction: column; align-items: flex-start; text-align: left; align-self: center; }
+.apply-row #apply { align-items: flex-start; gap: 12px; }
+.title-bubble { min-height: 0; margin: 0 0 14px -34px; font-size: 14px; padding: 7px 12px; white-space: nowrap; text-align: left; transform: rotate(-1.5deg); }
+.title-bubble::before { left: 84px; top: auto; bottom: -24px; border: 10px solid transparent; border-top: 14px solid var(--ink); }
+.title-bubble::after { left: 87px; top: auto; bottom: -15px; border: 7px solid transparent; border-top: 10px solid var(--cream); }
+@media (max-width: 480px) {
+  .card.title-card { padding: 18px 14px; }
+  .apply-row { column-gap: 12px; margin: 0 0 4px; left: 0; }
+  .chef-col { width: 92px; }
+  .title-bubble { font-size: 12px; line-height: 1.25; padding: 5px 7px; white-space: normal; width: 100%; box-sizing: border-box; }
+  .title-bubble { margin-left: 0; }
+  .title-bubble::before { left: 22px; }
+  .title-bubble::after { left: 25px; }
+  .apply-row .chef-wrap { width: 88px; height: 96px; }
+  .handle input { width: 10ch; }
+  .apply-row .big-btn { font-size: 17px; padding: 10px 16px; white-space: nowrap; }
+}
 .presents { font: 14px var(--deco); letter-spacing: .2em; text-transform: uppercase; color: var(--red); }
 .big {
-  margin: 4px 0 0; font: clamp(52px, 12vw, 92px)/0.95 var(--display); color: var(--mustard); letter-spacing: .01em;
+  margin: 4px 0 0; font: min(88px, 15.5cqi)/0.95 var(--display); color: var(--mustard); letter-spacing: .01em;
   -webkit-text-stroke: 3px var(--ink); text-shadow: 4px 4px 0 var(--red), 8px 8px 0 var(--ink);
 }
 .sub { font: 18px var(--deco); letter-spacing: .14em; text-transform: uppercase; margin: 6px 0 10px; }
-.pitch { font-size: 15px; margin: 0 auto 14px; max-width: 44ch; text-align: left; }
+.pitch { font-size: 16px; line-height: 1.5; margin: 24px auto 20px; max-width: 46ch; text-align: left; }
 #apply { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 #apply label { font: 14px var(--deco); letter-spacing: .1em; text-transform: uppercase; }
 .handle { display: flex; align-items: center; border: 3px solid var(--ink); border-radius: 12px; background: var(--cream); box-shadow: 3px 3px 0 var(--ink); }
 .handle span { font: 22px var(--display); padding: 0 4px 0 12px; }
 .handle input { border: 0; background: transparent; font: 20px var(--type); padding: 8px 12px 8px 0; width: 14ch; outline: none; color: var(--ink); }
 .err { color: var(--red); margin: 0; font-size: 14px; }
-.title-links { display: flex; gap: 18px; justify-content: center; margin-top: 14px; }
+.title-stack { position: relative; z-index: 1; width: 100%; max-width: 640px; display: flex; flex-direction: column; align-items: center; }
+/* The two side doors under the card: chunky, card-styled, scallion and ketchup. */
+.title-links { display: flex; gap: 22px; justify-content: center; margin-top: 30px; width: 100%; }
+.card-btn {
+  flex: 1; max-width: 230px; padding: 14px 18px; cursor: pointer;
+  font: 21px var(--display); letter-spacing: .03em; color: var(--cream);
+  -webkit-text-stroke: 1px var(--ink); text-shadow: 2px 2px 0 var(--ink);
+  border: 5px solid var(--ink); border-radius: 20px 26px 18px 24px; box-shadow: 7px 7px 0 var(--ink);
+  transition: transform .08s, box-shadow .08s;
+}
+.card-btn.howto { background: #46a748; transform: rotate(1.5deg); }
+.card-btn.fame-btn { background: #e04a3b; transform: rotate(-1.5deg); }
+.card-btn:hover { transform: translate(-2px, -2px) rotate(0deg); box-shadow: 9px 9px 0 var(--ink); }
+.card-btn:active { transform: translate(4px, 4px); box-shadow: 2px 2px 0 var(--ink); }
+.card-btn:focus-visible { outline: 3px dashed var(--ink); outline-offset: 4px; }
+@media (max-width: 480px) {
+  .title-links { gap: 14px; margin-top: 24px; }
+  .card-btn { font-size: 15px; padding: 12px 6px; white-space: nowrap; border-width: 4px; }
+}
 .link { background: none; border: 0; color: var(--ink); text-decoration: underline; cursor: pointer; font: 14px var(--type); }
 .paper h2 { margin: 0 0 12px; font: 28px var(--display); color: var(--red); -webkit-text-stroke: 1px var(--ink); }
 .x { position: absolute; top: 8px; right: 12px; background: none; border: 0; font: 30px/1 var(--display); cursor: pointer; color: var(--ink); }

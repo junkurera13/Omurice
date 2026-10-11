@@ -132,21 +132,30 @@
 <!-- Title -->
 <div class="screen title" id="s-title">
   <div class="rays" aria-hidden="true"></div>
+  <div class="title-stack">
   <div class="card title-card">
     <div class="presents">Hanjuku-tei presents</div>
     <h1 class="big boil">OMURICE</h1>
-    <div class="sub">A trial for line cooks</div>
-    <p class="pitch">One plate of omurice: the soft omelette that splits open over the rice. No recipe, no help. The head chef scores every step. <b>Score over 90 and you're hired.</b></p>
-    <form id="apply" autocomplete="off">
-      <label for="handle">Your 𝕏 username</label>
-      <div class="handle"><span>@</span><input id="handle" maxlength="15" placeholder="yourname" spellcheck="false" autocapitalize="off"></div>
-      <p class="err" id="handle-err" hidden></p>
-      <button class="btn go big-btn" type="submit">Start the trial</button>
-    </form>
-    <div class="title-links">
-      <button class="link" data-screen="recipe">How to play</button>
-      <button class="link" data-screen="fame">Wall of Fame</button>
+    <p class="pitch">Chef Okada is hiring. Cook him one omurice, from cracking the eggs to rolling the omelette onto the rice, then watch him slice it open. <b>Score over 90 and the job's yours.</b></p>
+    <div class="apply-row">
+      <div class="chef-col">
+        <div class="bubble title-bubble" id="title-bubble">Next! You, the new cook?</div>
+        <div class="chef-wrap" id="title-chef"></div>
+      </div>
+      <div class="apply-col">
+        <form id="apply" autocomplete="off">
+          <label for="handle">Your 𝕏 username</label>
+          <div class="handle"><span>@</span><input id="handle" maxlength="15" placeholder="yourname" spellcheck="false" autocapitalize="off"></div>
+          <p class="err" id="handle-err" hidden></p>
+          <button class="btn go big-btn" type="submit">Start the trial</button>
+        </form>
+      </div>
     </div>
+  </div>
+  <div class="title-links">
+    <button class="card-btn howto" data-screen="recipe">How to play</button>
+    <button class="card-btn fame-btn" data-screen="fame">Wall of Fame</button>
+  </div>
   </div>
 </div>
 

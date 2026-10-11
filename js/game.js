@@ -15,6 +15,8 @@ const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
 const sound = new Sound();
 const chef = new Chef($('#chef'), $('#bubble'));
+const titleChef = new Chef($('#title-chef'), $('#title-bubble'));
+$('#handle').addEventListener('focus', () => titleChef.say('Name. Then wash your hands.', 'sniff'));
 
 // Camera spots, relative to each set's origin.
 const VIEWS = {
