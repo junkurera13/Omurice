@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>OMURICE.EXE</title>
+<meta name="description" content="A line-cook trial at Hanjuku-tei. Cook the soft, split-open omelette for omurice. Score over 90 and you're hired.">
+<meta property="og:title" content="OMURICE.EXE · Line Cook Trial">
+<meta property="og:description" content="Cook the perfect split-open omurice egg. Score over 90/100 and you're hired.">
+<meta property="og:image" content="/og.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="OMURICE.EXE · Line Cook Trial">
+<meta name="twitter:description" content="Cook the perfect split-open omurice egg. Score over 90/100 and you're hired.">
+<meta name="twitter:image" content="/og.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%23c8341c' d='M1 11h14v2H1z'/%3E%3Cellipse cx='8' cy='10' rx='6' ry='3' fill='%23ffd23f' stroke='%23000' stroke-width='.6'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;600&family=VT323&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="desktop">
+  <nav class="icons" aria-label="Desktop">
+    <button class="icon" data-open="win-main"><span class="ico ico-egg"></span><span>Omurice<br>Trial</span></button>
+    <button class="icon" data-open="win-board"><span class="ico ico-trophy"></span><span>Hall of<br>Fame</span></button>
+    <button class="icon" data-open="win-notes"><span class="ico ico-note"></span><span>CHEF_<br>NOTES.TXT</span></button>
+  </nav>
+
+  <!-- Main game window -->
+  <section class="window" id="win-main" aria-label="Omurice trial">
+    <header class="titlebar"><span class="tb-ico ico-egg"></span><span class="tb-title">OMURICE.EXE - Hanjuku-tei Line Cook Trial</span>
+      <span class="tb-btns"><button class="tb-b" aria-label="Minimize" data-min>_</button><button class="tb-b" aria-label="Maximize" disabled>□</button><button class="tb-b" aria-label="Close" data-min>×</button></span>
+    </header>
+    <div class="menubar">
+      <button data-act="new"><u>G</u>ame: New trial</button>
+      <button data-open="win-board"><u>H</u>all of Fame</button>
+      <button data-open="win-notes"><u>C</u>hef's notes</button>
+      <button id="mute" aria-pressed="false">Sound: On</button>
+    </div>
+    <ol class="steps" id="steps">
+      <li data-step="beat">1. Beat</li>
+      <li data-step="cook">2. Cook</li>
+      <li data-step="plate">3. Plate</li>
+      <li data-step="cut">4. Cut</li>
+    </ol>
+    <div class="body">
+      <div class="stage sunken">
+        <canvas id="cv" width="600" height="480"></canvas>
+        <div class="cv-banner" id="banner" hidden></div>
+      </div>
+      <aside class="panel" id="panel">
+        <!-- Beat -->
+        <div data-panel="beat">
+          <fieldset><legend>Bowl</legend>
+            <p class="small">Crack three eggs, then beat them with chopsticks. Drag around the bowl in quick circles.</p>
+            <button class="btn" id="b-crack">Crack an egg <span id="egg-n">(0/3)</span></button>
+            <div class="meter-row"><label for="m-mix">Evenness</label><div class="meter" id="m-mix"><i></i></div></div>
+            <p class="small warn" id="shell-warn" hidden>A bit of shell fell in. Tap it to fish it out.</p>
+          </fieldset>
+          <button class="btn primary" id="b-to-cook" disabled>To the stove ▸</button>
+        </div>
+        <!-- Cook -->
+        <div data-panel="cook" hidden>
+          <fieldset><legend>Burner</legend>
+            <div class="knobs" role="radiogroup" aria-label="Burner">
+              <label><input type="radio" name="knob" value="0" checked> Off</label>
+              <label><input type="radio" name="knob" value="1"> Low</label>
+              <label><input type="radio" name="knob" value="2"> Med</label>
+              <label><input type="radio" name="knob" value="3"> High</label>
+            </div>
+            <div class="lcd" aria-live="off"><span>PAN</span><b id="lcd-t">22</b><span>°C</span></div>
+          </fieldset>
+          <fieldset><legend>Pan</legend>
+            <button class="btn" id="b-butter">Add butter (10 g)</button>
+            <button class="btn" id="b-pour" disabled>Pour in the eggs</button>
+            <div class="tilt-row">
+              <label for="tilt">Tilt pan away</label>
+              <input type="range" id="tilt" min="0" max="100" value="0">
+            </div>
+            <button class="btn" id="b-tap" disabled>Tap the handle <kbd>Space</kbd></button>
+          </fieldset>
+          <div class="readout"><span>Cook time</span><b id="cook-t">0.0 s</b></div>
+          <button class="btn primary" id="b-to-plate" disabled>Slide onto the rice ▸</button>
+        </div>
+        <!-- Plate -->
+        <div data-panel="plate" hidden>
+          <fieldset><legend>Plate</legend>
+            <p class="small">Click the spot on the rice where the omelette should land. Dead centre is best.</p>
+          </fieldset>
+        </div>
+        <!-- Cut -->
+        <div data-panel="cut" hidden>
+          <fieldset><legend>Knife</legend>
+            <p class="small">One cut. Drag the knife along the top of the omelette, tip to tip, straight down the middle.</p>
+          </fieldset>
+        </div>
+      </aside>
+    </div>
+    <footer class="statusbar">
+      <span class="sunken grow" id="status">Ready.</span>
+      <span class="sunken" id="who">Applicant: -</span>
+    </footer>
+  </section>
+
+  <!-- Application form -->
+  <section class="window dialog" id="win-apply" aria-label="Application">
+    <header class="titlebar"><span class="tb-title">Job Application - Hanjuku-tei</span></header>
+    <div class="dlg-body">
+      <div class="dlg-row">
+        <div class="big-ico ico-chef" aria-hidden="true"></div>
+        <div>
+          <p><b>Hanjuku-tei</b> is hiring a line cook.</p>
+          <p>Your trial is one plate of omurice: ketchup rice under a soft omelette that splits open and spills over the rice when you cut it.</p>
+          <p>Chef scores the egg out of 100. <b>Over 90 and you're hired.</b></p>
+        </div>
+      </div>
+      <form id="apply-form" autocomplete="off">
+        <label for="name">Name or @username:</label>
+        <input id="name" maxlength="18" required placeholder="e.g. eggcellent_ken" spellcheck="false">
+        <p class="small err" id="name-err" hidden></p>
+        <div class="dlg-btns">
+          <button type="button" class="btn" data-open="win-notes">Chef's notes…</button>
+          <button type="submit" class="btn primary">Start trial</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <!-- Chef's notes -->
+  <section class="window notes" id="win-notes" hidden aria-label="Chef's notes">
+    <header class="titlebar"><span class="tb-ico ico-note"></span><span class="tb-title">CHEF_NOTES.TXT - Notepad</span>
+      <span class="tb-btns"><button class="tb-b" aria-label="Close" data-close="win-notes">×</button></span></header>
+    <div class="menubar"><span>File</span><span>Edit</span><span>Search</span><span>Help</span></div>
+    <pre class="notepad">THE TAMPOPO OMELETTE: HOW WE DO IT HERE
+========================================
+
+The egg is a soft football of barely-set egg.
+It sits on the rice. You slit it end to end,
+it falls open, and the creamy middle spills
+down over the rice. "Hanjuku" = half-set.
+
+1. BEAT
+   3 eggs. Beat until there are no streaks of
+   white. Don't whip air into it. Pick out any
+   shell.
+
+2. HEAT + BUTTER
+   Medium-high. Add a pat of butter (10-20 g).
+   Wait for it to melt and FOAM. Pour while it
+   foams. Brown butter = too late. Smoke = way
+   too late.
+
+3. SCRAMBLE
+   The second the egg hits the pan, stir hard
+   with the chopsticks. Fast little circles,
+   all over the pan. This makes small soft
+   curds. About 8-12 seconds.
+
+4. STOP
+   When it's like wet scrambled egg on top, STOP
+   stirring. Let the bottom set into a thin skin
+   for a few seconds. Turn the heat down if you
+   need time.
+
+5. ROLL
+   Tilt the pan away from you. Tap the handle
+   so the omelette folds over itself toward the
+   far edge. Keep tapping until it's a football.
+   Skin too raw = it tears. Too cooked = it
+   cracks.
+
+6. PLATE + CUT
+   Slide it onto the middle of the rice. One cut
+   along the top, tip to tip. If you got it
+   right it opens up and covers the rice.
+
+Don't let it brown. Pale yellow only.
+Total time in the pan: well under a minute.
+
+                                   - Chef Okada</pre>
+  </section>
+
+  <!-- Leaderboard -->
+  <section class="window board" id="win-board" hidden aria-label="Hall of Fame">
+    <header class="titlebar"><span class="tb-ico ico-trophy"></span><span class="tb-title">Hall of Fame - Hanjuku-tei</span>
+      <span class="tb-btns"><button class="tb-b" aria-label="Close" data-close="win-board">×</button></span></header>
+    <div class="dlg-body">
+      <div class="listview sunken">
+        <table>
+          <thead><tr><th>#</th><th>Applicant</th><th>Score</th><th>Result</th></tr></thead>
+          <tbody id="board-rows"><tr><td colspan="4" class="muted">Loading scores…</td></tr></tbody>
+        </table>
+      </div>
+      <p class="small muted" id="board-note">Best score per applicant. Over 90 = hired.</p>
+      <div class="dlg-btns"><button class="btn" id="b-board-refresh">Refresh</button><button class="btn primary" data-close="win-board">OK</button></div>
+    </div>
+  </section>
+
+  <!-- Result -->
+  <section class="window result" id="win-result" hidden aria-label="Result">
+    <header class="titlebar"><span class="tb-title">Employment Decision</span>
+      <span class="tb-btns"><button class="tb-b" aria-label="Close" data-close="win-result">×</button></span></header>
+    <div class="dlg-body">
+      <div class="verdict">
+        <div class="score-box sunken"><b id="r-score">0</b><span>/100</span></div>
+        <div>
+          <div class="stamp" id="r-stamp">HIRED</div>
+          <p id="r-line"></p>
+        </div>
+      </div>
+      <div class="listview sunken">
+        <table class="breakdown">
+          <thead><tr><th>Station</th><th>Pts</th><th>Chef's remarks</th></tr></thead>
+          <tbody id="r-rows"></tbody>
+        </table>
+      </div>
+      <p class="small muted" id="r-rank"></p>
+      <div class="dlg-btns">
+        <a class="btn x" id="r-share" target="_blank" rel="noopener">Share on 𝕏</a>
+        <button class="btn" data-open="win-board">Hall of Fame</button>
+        <button class="btn primary" data-act="new">Try again</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="scrim" hidden></div>
+</div>
+<footer id="taskbar">
+  <button id="start"><span class="win-logo" aria-hidden="true"></span><b>Start</b></button>
+  <div class="tasks" id="tasks"><button class="task active" data-open="win-main"><span class="tb-ico ico-egg"></span>OMURICE.EXE</button></div>
+  <div class="tray sunken"><span id="clock">12:00</span></div>
+</footer>
+<script type="module" src="js/game.js"></script>
+</body>
+</html>
