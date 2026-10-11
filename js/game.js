@@ -1,5 +1,5 @@
 import * as THREE from '../vendor/three.module.min.js';
-import { Bowl, Pan, scoreRun, RUBRIC, clamp, sstep, lerp } from './sim.js';
+import { Bowl, Pan, scoreRun, clamp, sstep, lerp } from './sim.js';
 import { World, SETS } from './world.js';
 import { woodTexture } from './textures.js';
 import { Stove, Pan3D, Chopsticks } from './pan3d.js';
@@ -636,16 +636,6 @@ function update(dt) {
     if (plate3d.tipDone) startJudge();
   }
   if (st === 'judge') judgeTick(dt);
-}
-
-// Judging criteria, shown on the rules card (what's scored, not how to do it).
-$('#rubric').innerHTML = '';
-for (const sec of RUBRIC) {
-  const li = document.createElement('li');
-  const h = document.createElement('b'); h.textContent = `${sec.label} (${sec.max})`;
-  const ul = document.createElement('ul');
-  for (const it of sec.items) { const x = document.createElement('li'); x.textContent = it; ul.appendChild(x); }
-  li.append(h, ul); $('#rubric').appendChild(li);
 }
 
 setStage('beat');
