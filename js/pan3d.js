@@ -80,37 +80,41 @@ export class Stove {
   }
 }
 
+// The frying pan itself (body + handle), added to `g`. Origin is the
+// centre of the cooking surface; the handle points to +z.
+export function buildPanBody(g) {
+  const prof = [[0, 0]];
+  for (let r = 0.5; r <= 8; r += 0.5) prof.push([r, 0]);
+  for (let r = 8.2; r <= 10; r += 0.2) prof.push([r, ((r - 8) / 2) ** 2 * 0.9]);
+  for (let k = 1; k <= 12; k++) { const t = k / 12; prof.push([10 + t * 2.3, 0.9 + Math.sin(t * Math.PI / 2) * 3.7]); }
+  prof.push([12.55, 4.75], [12.75, 4.6], [12.6, 3.6]);
+  for (let k = 1; k <= 8; k++) { const t = k / 8; prof.push([12.6 - t * 2.2, 3.6 - Math.sin(t * Math.PI / 2) * 3.95]); }
+  prof.push([5, -0.35], [0.01, -0.35]);
+  const body = new THREE.Mesh(lathe(prof, 120), new THREE.MeshPhysicalMaterial({ color: 0x1f2023, roughness: 0.4, metalness: 0.35, clearcoat: 0.45, clearcoatRoughness: 0.35, side: THREE.DoubleSide }));
+  body.castShadow = true; body.receiveShadow = true;
+  g.add(body);
+  const hg = new THREE.Group();
+  hg.position.set(0, 3.9, 12.3);
+  hg.rotation.x = -0.2;
+  const bake = new THREE.MeshPhysicalMaterial({ color: 0x141312, roughness: 0.5, clearcoat: 0.6, clearcoatRoughness: 0.4 });
+  const steelM = new THREE.MeshStandardMaterial({ color: 0x6d7076, metalness: 1, roughness: 0.38 });
+  const bracket = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.0, 3.2), steelM);
+  bracket.position.z = 1.2; hg.add(bracket);
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.25, 17, 20), bake);
+  handle.rotation.x = Math.PI / 2; handle.scale.set(1.25, 1, 0.8);
+  handle.position.z = 10.5; handle.castShadow = true;
+  hg.add(handle);
+  g.add(hg);
+  return hg;
+}
+
 export class Pan3D {
   constructor(world, stove) {
     this.world = world;
     const g = (this.group = new THREE.Group());
     g.position.set(0, 2.6, 0);
     stove.group.add(g);
-    // Body: non-stick inside, a flat floor curving into the wall.
-    const prof = [[0, 0]];
-    for (let r = 0.5; r <= 8; r += 0.5) prof.push([r, 0]);
-    for (let r = 8.2; r <= 10; r += 0.2) prof.push([r, ((r - 8) / 2) ** 2 * 0.9]);
-    for (let k = 1; k <= 12; k++) { const t = k / 12; prof.push([10 + t * 2.3, 0.9 + Math.sin(t * Math.PI / 2) * 3.7]); }
-    prof.push([12.55, 4.75], [12.75, 4.6], [12.6, 3.6]);
-    for (let k = 1; k <= 8; k++) { const t = k / 8; prof.push([12.6 - t * 2.2, 3.6 - Math.sin(t * Math.PI / 2) * 3.95]); }
-    prof.push([5, -0.35], [0.01, -0.35]);
-    const body = new THREE.Mesh(lathe(prof, 120), new THREE.MeshPhysicalMaterial({ color: 0x1f2023, roughness: 0.4, metalness: 0.35, clearcoat: 0.45, clearcoatRoughness: 0.35, side: THREE.DoubleSide }));
-    body.castShadow = true; body.receiveShadow = true;
-    g.add(body);
-    // Handle toward the cook.
-    const hg = new THREE.Group();
-    hg.position.set(0, 3.9, 12.3);
-    hg.rotation.x = -0.2;
-    const bake = new THREE.MeshPhysicalMaterial({ color: 0x141312, roughness: 0.5, clearcoat: 0.6, clearcoatRoughness: 0.4 });
-    const steelM = new THREE.MeshStandardMaterial({ color: 0x6d7076, metalness: 1, roughness: 0.38 });
-    const bracket = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.0, 3.2), steelM);
-    bracket.position.z = 1.2; hg.add(bracket);
-    const handle = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.25, 17, 20), bake);
-    handle.rotation.x = Math.PI / 2; handle.scale.set(1.25, 1, 0.8);
-    handle.position.z = 10.5; handle.castShadow = true;
-    hg.add(handle);
-    g.add(hg);
-    this.handle = hg;
+    this.handle = buildPanBody(g);
 
     // The egg: a deformable sheet with a top side and a skin side.
     const span = ((PN - 1) * (200 / (2 * PN * 0.47))) / 10; // grid span in cm
@@ -291,11 +295,12 @@ export class Pan3D {
         const bv = clamp(br * (0.2 + edge * 1.1), 0, 1);
         r = lerp(r, 170, bv); gg = lerp(gg, 104, bv); b = lerp(b, 36, bv);
         col[o] = r; col[o + 1] = gg; col[o + 2] = b;
-        col[o + 3] = h > 0.12 ? 255 : h > 0.02 ? Math.round(((h - 0.02) / 0.1) * 255) : 0;
+        // The visible edge sits where the egg is ~1 mm thick: a rounded lip.
+        col[o + 3] = h > 1.3 ? 255 : h > 0.5 ? Math.round(((h - 0.5) / 0.8) * 255) : 0;
         // Wet egg: glossy clear coat, low roughness. Set egg: satin.
         const wet = 1 - sstep(0.35, 0.95, dm * 0.8 + lump * 0.4);
-        rough[o] = Math.round(lerp(60, 255, wet));          // clearcoat strength
-        rough[o + 1] = Math.round(lerp(150, 28, wet));      // roughness
+        rough[o] = Math.round(lerp(50, 170, wet));          // clearcoat strength
+        rough[o + 1] = Math.round(lerp(150, 70, wet));      // roughness: satin, not oily
         // Skin side: pale yellow, browned where hot.
         const sk = sstep(0.2, 0.9, db);
         const sb = clamp(br, 0, 1);

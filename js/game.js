@@ -21,7 +21,7 @@ const VIEWS = {
   beat: { set: 'bowl', pos: V(0, 33, 27), at: V(0, 2, 0.5) },
   cook: { set: 'stove', pos: V(0, 44, 19), at: V(0, 2, -1.5) },
   fold: { set: 'stove', pos: V(-26, 21, 14), at: V(0, 3, -3.5) },
-  plate: { set: 'plate', pos: V(0, 40, 33), at: V(0, 1.5, 0.5) },
+  plate: { set: 'plate', pos: V(-30, 32, 30), at: V(0, 5, -4) },
   judge: { set: 'plate', pos: V(-5, 21, 28), at: V(0, 3.6, 0.3) },
 };
 const viewPos = v => [v.pos.clone().add(SETS[v.set]), v.at.clone().add(SETS[v.set])];
@@ -316,9 +316,10 @@ function startPlate() {
     tears: pan.tears, creases: pan.creases,
   };
   setStage('plate');
-  iris(() => goView('plate', false));
-  chef.say(R < 0.4 ? 'That isn’t folded. Put it on the rice anyway.' : 'Seam down, in the middle of the rice.', R < 0.4 ? 'angry' : 'neutral');
-  caption('Click the rice where it should land');
+  iris(() => { goView('plate', false); plate3d.aim(S.spec); });
+  S.aimP = V(0, 0, 0);
+  chef.say(R < 0.4 ? 'That isn’t folded. Tip it on anyway.' : 'Over the middle of the rice. Then turn the pan over.', R < 0.4 ? 'angry' : 'neutral');
+  caption('Move the pan over the rice, then click to tip it out');
 }
 
 function hitPlate(cx, cy) {
@@ -331,16 +332,16 @@ function hitPlate(cx, cy) {
   return null;
 }
 
+// Tip the pan over the rice where the player aimed it.
 function placeOmelette(p) {
+  if (!plate3d.aiming) return;
   S.plateOffset = Math.hypot(p.x, p.z);
-  const lim = 3.2;
-  const x = clamp(p.x, -lim, lim), z = clamp(p.z, -lim, lim);
-  plate3d.showGhost(null);
-  plate3d.place({ x, z, ...S.spec });
-  sound.plop();
+  plate3d.setAim(p.x, p.z);
+  plate3d.tip();
+  sound.burst(0.4, 900, 0.8, 0.18);
   S.stage = 'placed';
+  S.landed = false;
   caption('');
-  setTimeout(startJudge, 1100);
 }
 
 /* ------------------------------------------------------------------ */
@@ -524,7 +525,8 @@ function onMove(e) {
     }
     P.last = h ? h.cell : null;
   } else if (S.stage === 'plate') {
-    plate3d.showGhost(hitPlate(e.clientX, e.clientY), S.spec);
+    const p = hitPlate(e.clientX, e.clientY);
+    if (p) { S.aimP = p; plate3d.setAim(p.x, p.z); }
   }
   P.lastT = now;
 }
@@ -631,6 +633,10 @@ function update(dt) {
     chefWatch(pan, agg);
   }
   if (plate3d && plate3d.om && (st === 'placed' || st === 'judge' || st === 'result' || st === 'plate')) plate3d.update(dt);
+  if (st === 'placed') {
+    if (!S.landed && plate3d.tipT > 1.3) { S.landed = true; sound.plop(); }
+    if (plate3d.tipDone) startJudge();
+  }
   if (st === 'judge') judgeTick(dt);
 }
 

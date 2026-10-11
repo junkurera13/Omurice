@@ -566,7 +566,9 @@ export class Pan {
         z[k] = zb[k] + (i - this.c) * tx + (j - this.c) * ty;
       }
       const sub = 8, sdt = dt / sub;
-      for (let s2 = 0; s2 < sub; s2++) this.flow.step(h, z, mob, mask, [dm, cu, yk, br], sdt, 9, 0.9);
+      // Beaten egg is thick: it flows slowly and keeps a rounded edge
+      // ~2 mm high instead of thinning out to a film.
+      for (let s2 = 0; s2 < sub; s2++) this.flow.step(h, z, mob, mask, [dm, cu, yk, br], sdt, 6, 1.5);
     }
   }
 

@@ -5,6 +5,7 @@ import * as THREE from '../vendor/three.module.min.js';
 import { lathe, gridGeometry, dataTexture } from './world.js';
 import { skinTextures, custardTextures, riceTextures, custardColor, valueNoise, fbm } from './textures.js';
 import { subsurface } from './materials.js';
+import { buildPanBody } from './pan3d.js';
 import { Flow, bilinear, clamp, sstep, lerp, rng } from './sim.js';
 
 export const RICE = { a: 8.2, b: 5.7, h: 4.6 };
@@ -178,7 +179,20 @@ export class Plate3D {
     this.innerMat = subsurface(new THREE.MeshPhysicalMaterial({ roughness: 0.15, clearcoat: 1, clearcoatRoughness: 0.08, side: THREE.BackSide }));
     this.skin = new THREE.Mesh(geo, this.skinMat);
     this.inner = new THREE.Mesh(geo, this.innerMat);
-    for (const m of [this.skin, this.inner]) { m.castShadow = true; m.receiveShadow = true; m.visible = false; m.frustumCulled = false; this.group.add(m); }
+    // The omelette rides in a carrier so it can be tipped out of the pan.
+    this.carrier = new THREE.Group();
+    this.group.add(this.carrier);
+    for (const m of [this.skin, this.inner]) { m.castShadow = true; m.receiveShadow = true; m.visible = false; m.frustumCulled = false; this.carrier.add(m); }
+    // The pan for plating. Pivot is the lip it tips over; handle points away.
+    this.tipper = new THREE.Group();
+    const panInner = new THREE.Group();
+    panInner.rotation.y = Math.PI;
+    panInner.position.set(0, -4.7, -12.6);
+    buildPanBody(panInner);
+    this.tipper.add(panInner);
+    this.tipper.visible = false;
+    this.group.add(this.tipper);
+    this.aiming = false; this.tipping = false; this.tipDone = false;
   }
 
   buildCustard() {
@@ -249,7 +263,9 @@ export class Plate3D {
     const wet = 1 - sstep(0.5, 0.85, dm);
     this.innerMat.roughness = lerp(0.7, 0.25, wet);
     this.innerMat.clearcoat = lerp(0.05, 0.5, wet);
-    this.om = { ...spec, s: 0, sv: 0, sT: 0, uk: -2, drop: 1, t: 0, open: false, emitted: 0 };
+    this.om = { ...spec, s: 0, sv: 0, sT: 0, uk: -2, drop: 0, t: 0, open: false, emitted: 0 };
+    this.carrier.position.set(0, 0, 0); this.carrier.quaternion.identity(); this.carrier.scale.set(1, 1, 1);
+    this.skin.position.set(0, 0, 0); this.inner.position.set(0, 0, 0);
     this.mob0 = mobility(dm);
     const raw = sstep(0.42, 0.18, dm);
     // About half the egg is inside the skin; raw egg also floods out.
@@ -285,9 +301,85 @@ export class Plate3D {
     this.knife.visible = true;
   }
 
+  /* ---------- plating: the pan tips the omelette onto the rice ---------- */
+
+  // Centre of the closed omelette when it sits at (x, z) on the rice.
+  restCentre(o) {
+    const yb = Math.max(riceTop(o.x, o.z), plateTop(o.x, o.z)) - 0.25;
+    return new THREE.Vector3(o.x, yb + o.A * 0.92, o.z);
+  }
+  aim(spec) {
+    this.place({ ...spec, x: 0, z: 0 });
+    this.aiming = true; this.tipping = false; this.tipDone = false;
+    this.om.flat = 1;
+    this.updateOmelette(0);
+    this.tipper.visible = true;
+    this.poseTip(0, 0);
+  }
+  setAim(x, z) {
+    if (!this.aiming) return;
+    const o = this.om;
+    o.x = clamp(x, -3.2, 3.2); o.z = clamp(z, -3.2, 3.2);
+    this.updateOmelette(0);
+    this.poseTip(0, 0);
+  }
+  tip() {
+    if (!this.aiming) return false;
+    this.aiming = false; this.tipping = true; this.tipT = 0; this.sep = null;
+    return true;
+  }
+  // phi: how far the omelette has turned over (0 in the pan, PI on the rice).
+  poseTip(phi, t) {
+    const o = this.om, A = o.A;
+    const C = this.restCentre(o);
+    const L0 = new THREE.Vector3(0, -3.8 + A * 0.92, -(2.4 + A * 1.18));
+    const pivot = new THREE.Vector3(C.x, C.y + L0.y, C.z + L0.z);
+    // Held up and back while aiming; swings down as it tips.
+    const lift = 1 - sstep(0, 1.3, phi);
+    pivot.add(new THREE.Vector3(0, 4.5 * lift, -2 * lift));
+    const theta = Math.min(phi, 2.05);
+    const away = Math.max(0, t - 1.35);
+    this.tipper.position.set(pivot.x, pivot.y + away * 22, pivot.z - away * 18);
+    this.tipper.rotation.set(theta - away * 1.2, 0, 0);
+    this.tipper.visible = away < 0.8;
+    // The omelette rides in the pan, then slides off the lip and lands.
+    const phiS = 1.75;
+    const rot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), phi + Math.PI);
+    let centre;
+    if (phi < phiS) {
+      centre = L0.clone().applyAxisAngle(new THREE.Vector3(1, 0, 0), phi).add(pivot);
+      this.sep = centre.clone();
+    } else {
+      const k = (phi - phiS) / (Math.PI - phiS);
+      centre = this.sep.clone().lerp(C, k);
+      centre.y += Math.sin(k * Math.PI) * 0.8;
+    }
+    this.skin.position.copy(C).negate(); this.inner.position.copy(C).negate();
+    this.carrier.position.copy(centre);
+    this.carrier.quaternion.copy(rot);
+    // A soft squash as it lands.
+    const land = t > 1.3 ? Math.sin(Math.min(1, (t - 1.3) / 0.35) * Math.PI) * Math.exp(-(t - 1.3) * 3) : 0;
+    this.carrier.scale.set(1 + land * 0.08, 1 - land * 0.16, 1 + land * 0.08);
+  }
+
   update(dt) {
     const o = this.om;
     if (!o) return;
+    if (this.tipping) {
+      this.tipT += dt;
+      const t = this.tipT;
+      const e = Math.min(1, t / 1.3);
+      const phi = Math.PI * (e < 0.5 ? 2 * e * e : 1 - (-2 * e + 2) ** 2 / 2);
+      if (t > 1.2 && o.flat > 0) { o.flat = 1 - sstep(1.2, 1.5, t); this.updateOmelette(0); }
+      this.poseTip(phi, t);
+      if (t > 2.0) {
+        this.tipping = false; this.tipDone = true; this.tipper.visible = false;
+        this.carrier.position.set(0, 0, 0); this.carrier.quaternion.identity(); this.carrier.scale.set(1, 1, 1);
+        this.skin.position.set(0, 0, 0); this.inner.position.set(0, 0, 0);
+      }
+      return;
+    }
+    if (this.aiming) return;
     if (o.drop > 0) o.drop = Math.max(0, o.drop - dt * 2.6);
     if (o.open) {
       o.t += dt;
@@ -343,7 +435,9 @@ export class Plate3D {
         const p = Math.max(0, 1 - u * u);
         const a = A * Math.pow(p, 0.72) + 0.03;
         const x0 = o.x + u * L;
-        const yb = Math.max(riceTop(x0, o.z), plateTop(x0, o.z)) - 0.25;
+        // In the pan it's a straight football; on the rice it settles to the dome.
+        const ybRice = Math.max(riceTop(x0, o.z), plateTop(x0, o.z)) - 0.25;
+        const yb = o.flat ? lerp(ybRice, this.restCentre(o).y - o.A * 0.92, o.flat) : ybRice;
         let x = x0;
         let y = yb + a * 0.92 * (1 - Math.cos(theta)) * squash;
         let z = o.z + a * 1.18 * Math.sin(theta) / squash;
@@ -413,7 +507,8 @@ export class Plate3D {
     cmob.fill(m);
     if (m > 0.002) {
       const sub = 4;
-      for (let q = 0; q < sub; q++) this.cflow.step(ch, cz, cmob, this.cmask, [], dt / sub, 45, 0.035);
+      // Thick and creamy: it holds a ~1.5 mm film and sags rather than runs.
+      for (let q = 0; q < sub; q++) this.cflow.step(ch, cz, cmob, this.cmask, [], dt / sub, 30, 0.15);
     }
     this.renderCustard();
   }
@@ -432,7 +527,7 @@ export class Plate3D {
       const crumb = done * sstep(0.4, 0.75, cr);
       const bump = lump * 0.16 + crumb * 0.16 * (h > 0.05 ? 1 : 0);
       pos[k * 3 + 1] = this.cz[k] + h + (h > 0.03 ? bump : -0.3);
-      const a = h > 0.06 ? 255 : h > 0.02 ? ((h - 0.02) / 0.04) * 255 : 0;
+      const a = h > 0.14 ? 255 : h > 0.06 ? ((h - 0.06) / 0.08) * 255 : 0;
       d[k * 4] = d[k * 4 + 1] = d[k * 4 + 2] = a; d[k * 4 + 3] = 255;
     }
     this.cTex.needsUpdate = true;
@@ -465,6 +560,8 @@ export class Plate3D {
 
   reset() {
     this.om = null;
+    this.aiming = this.tipping = this.tipDone = false;
+    this.tipper.visible = false;
     this.skin.visible = this.inner.visible = this.cMesh.visible = this.knife.visible = this.ghost.visible = false;
     this.ch.fill(0);
   }
