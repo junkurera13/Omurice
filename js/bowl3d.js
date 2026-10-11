@@ -2,13 +2,19 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { lathe, gridGeometry, dataTexture } from './world.js';
 import { woodTexture } from './textures.js';
-import { bilinear, clamp, sstep, lerp, BN } from './sim.js';
+import { bilinear, clamp, sstep, lerp, BN, MAX_EGGS } from './sim.js';
 import { rawEggRGB } from './pan3d.js';
 import { subsurface } from './materials.js';
 
 const M = 110;
-const LIQ_Y = 2.9;   // liquid surface height inside the bowl (cm)
+const LIQ_Y = 2.9;   // liquid surface height with three eggs (cm)
 const LIQ_R = 6.55;  // liquid radius (cm), matches the bowl wall at that height
+// Surface height and radius for 0-5 eggs, from the bowl's inner profile.
+const LEVEL_Y = [0.6, 1.71, 2.38, 2.9, 3.34, 3.74, 4.1];
+const LEVEL_R = [3.4, 5.07, 5.96, 6.55, 7.0, 7.38, 7.7];
+// The carton: two rows of three cups to the right of the bowl.
+const CARTON = { x: 16.2, z: 0.5, w: 9.6, d: 14.2, h: 2.2 };
+const CUPS = [[-2.3, -4.6], [2.3, -4.6], [-2.3, 0], [2.3, 0], [-2.3, 4.6], [2.3, 4.6]];
 
 export class Bowl3D {
   constructor(world, origin, wood) {
@@ -41,6 +47,8 @@ export class Bowl3D {
     this.liquid = new THREE.Mesh(this.geo, this.mat);
     this.liquid.position.y = LIQ_Y; this.liquid.visible = false; this.liquid.receiveShadow = true;
     g.add(this.liquid);
+    this.liqY = LIQ_Y; this.liqR = LIQ_R;
+    this.buildCarton();
     // Falling egg (for the crack).
     this.shellMat = new THREE.MeshPhysicalMaterial({ color: 0xf1dfc6, roughness: 0.55, sheen: 0.4 });
     this.buildCrackRig();
@@ -53,15 +61,67 @@ export class Bowl3D {
     this.bitGeo = new THREE.SphereGeometry(0.9, 10, 6, 0, Math.PI * 0.7, 0, Math.PI * 0.4);
   }
 
-  liquidY() { return LIQ_Y; }
-  // Bowl grid cell <-> local cm.
+  liquidY() { return this.liqY; }
+  // Bowl grid cell <-> local cm. The grid spans the liquid, which widens
+  // as it rises up the bowl.
   toCell(x, z) {
-    const s = (2 * LIQ_R) / (BN - 1);
+    const s = (2 * this.liqR) / (BN - 1);
     return [x / s + (BN - 1) / 2, z / s + (BN - 1) / 2];
   }
   toLocal(gx, gy) {
-    const s = (2 * LIQ_R) / (BN - 1);
+    const s = (2 * this.liqR) / (BN - 1);
     return [(gx - (BN - 1) / 2) * s, (gy - (BN - 1) / 2) * s];
+  }
+
+  // A pulp-card egg carton, full.
+  buildCarton() {
+    const pulp = new THREE.MeshPhysicalMaterial({ color: 0xb9a786, roughness: 0.95, sheen: 0.2 });
+    const c = (this.carton = new THREE.Group());
+    c.position.set(CARTON.x, 0, CARTON.z);
+    const base = new THREE.Mesh(new THREE.BoxGeometry(CARTON.w, CARTON.h * 0.55, CARTON.d), pulp);
+    base.position.y = CARTON.h * 0.275; base.castShadow = base.receiveShadow = true;
+    c.add(base);
+    const cupGeo = new THREE.CylinderGeometry(2.05, 1.6, CARTON.h, 24, 1, true);
+    const cupIn = new THREE.MeshPhysicalMaterial({ color: 0xa8957a, roughness: 1, side: THREE.DoubleSide });
+    for (const [x, z] of CUPS) {
+      const cup = new THREE.Mesh(cupGeo, cupIn);
+      cup.position.set(x, CARTON.h * 0.5, z); cup.castShadow = cup.receiveShadow = true;
+      c.add(cup);
+    }
+    // Upright whole eggs, pointy end up.
+    const pts = [];
+    for (let k = 0; k <= 28; k++) {
+      const t = k / 28, y = -Math.cos(Math.PI * t) * 2.8;
+      pts.push([Math.max(0.01, Math.sin(Math.PI * t) * 2.1 * (1 - 0.1 * (y / 2.8))), y]);
+    }
+    const eggGeo = lathe(pts, 40);
+    const shell = new THREE.MeshPhysicalMaterial({ color: 0xe8cfae, roughness: 0.65, sheen: 0.3, sheenColor: new THREE.Color(0xfff4e0), envMapIntensity: 0.5 });
+    this.cartonEggs = CUPS.slice(0, MAX_EGGS).map(([x, z]) => {
+      const e = new THREE.Mesh(eggGeo, shell);
+      e.position.set(x, CARTON.h + 1.6, z); e.castShadow = true;
+      c.add(e);
+      return e;
+    });
+    this.group.add(c);
+  }
+  // Put every egg back in the carton for a new trial.
+  resetCarton() {
+    for (const e of this.cartonEggs) e.visible = true;
+    this.liqY = LEVEL_Y[0]; this.liqR = LEVEL_R[0];
+  }
+  // Is local point p (on the carton's top plane) over the carton?
+  overCarton(p) {
+    return p && Math.abs(p.x - CARTON.x) < CARTON.w / 2 + 0.5 && Math.abs(p.z - CARTON.z) < CARTON.d / 2 + 0.5;
+  }
+  cartonTopY() { return CARTON.h + 1.6; }
+  // Lift the egg nearest p (or the next one) out of the carton; returns where it was.
+  takeEgg(p) {
+    const left = this.cartonEggs.filter(e => e.visible);
+    if (!left.length) return null;
+    const at = e => new THREE.Vector3(CARTON.x + e.position.x, e.position.y, CARTON.z + e.position.z);
+    const pick = p ? left.reduce((a, b) => (at(a).distanceToSquared(p) <= at(b).distanceToSquared(p) ? a : b)) : left[0];
+    pick.visible = false;
+    return at(pick);
   }
 
   // A whole egg, split into two shell halves along the crack line.
@@ -107,9 +167,10 @@ export class Bowl3D {
 
   // Bring an egg in, tap it on the rim, pull it apart over `target`
   // (local x/z) and let the yolk and white fall in.
-  crackAnim(target, onTap, onDrop) {
+  crackAnim(target, onTap, onDrop, from) {
     if (this.crackBusy) return false;
     this.crackT = 0; this.crackTarget = target; this.onTap = onTap; this.onDrop = onDrop;
+    this.crackFrom = from || new THREE.Vector3(17, 15, 3);
     this.tapped = false; this.dropped = false;
     this.egg.visible = true;
     this.hA.position.set(0, 0, 0); this.hB.position.set(0, 0, 0);
@@ -127,9 +188,9 @@ export class Bowl3D {
     const rim = new THREE.Vector3(10.6, 8.3, 0);
     let pos;
     if (t < 0.3) {
-      // Swing in and knock it on the rim.
-      const k = ease(t / 0.3);
-      pos = new THREE.Vector3(L(17, rim.x, k), L(15, rim.y, k), L(3, rim.z, k));
+      // Lift it from the carton and knock it on the rim.
+      const k = ease(t / 0.3), F = this.crackFrom;
+      pos = new THREE.Vector3(L(F.x, rim.x, k), L(F.y, rim.y, k) + Math.sin(Math.PI * k) * 4, L(F.z, rim.z, k));
       this.egg.rotation.set(0, 0, L(0.9, 0.15, k));
     } else if (t < 0.42) {
       if (!this.tapped) { this.tapped = true; this.onTap && this.onTap(); }
@@ -167,7 +228,7 @@ export class Bowl3D {
       this.fallYolk.scale.set(1.05, 1.05 * (1 + v * 0.01), 1.05);
       this.fallWhite.position.set(P.x + 0.3, y + 0.6, P.z);
       this.fallWhite.scale.set(1.6, 1.6 * (1 + v * 0.025), 1.4);
-      if (y <= LIQ_Y + 0.5) {
+      if (y <= this.liqY + 0.5) {
         this.dropped = true;
         this.fallYolk.visible = this.fallWhite.visible = false;
         this.onDrop && this.onDrop();
@@ -178,6 +239,12 @@ export class Bowl3D {
 
   update(bowl, t, dt) {
     this.updateCrack(dt);
+    // The surface rises (and widens) as each egg lands.
+    const n = Math.min(bowl.eggs, LEVEL_Y.length - 1), k = 1 - Math.exp(-dt * 6);
+    this.liqY = lerp(this.liqY, LEVEL_Y[n], k);
+    this.liqR = lerp(this.liqR, LEVEL_R[n], k);
+    this.liquid.position.y = this.liqY;
+    this.liquid.scale.set(this.liqR / LIQ_R, 1, this.liqR / LIQ_R);
     // Shell fragments.
     while (this.bits.length < bowl.shells.length) {
       const m = new THREE.Mesh(this.bitGeo, this.shellMat);
@@ -187,7 +254,7 @@ export class Bowl3D {
     while (this.bits.length > bowl.shells.length) this.group.remove(this.bits.pop());
     bowl.shells.forEach((s, i) => {
       const [x, z] = this.toLocal(s.x, s.y);
-      this.bits[i].position.set(x, LIQ_Y + 0.12 + Math.sin(t * 2 + i) * 0.03, z);
+      this.bits[i].position.set(x, this.liqY + 0.12 + Math.sin(t * 2 + i) * 0.03, z);
       this.bits[i].rotation.set(Math.PI, s.rot, 0.2);
     });
     // Unbroken yolks: glossy domes that slump as the chopsticks break them.
@@ -195,13 +262,13 @@ export class Bowl3D {
       const m = new THREE.Mesh(this.yolkGeo, this.yolkMat);
       m.castShadow = true; this.group.add(m); this.yolkMeshes.push(m);
     }
-    const cs = (2 * LIQ_R) / (BN - 1);
+    const cs = (2 * this.liqR) / (BN - 1);
     bowl.yolks.forEach((Y, i) => {
       const m = this.yolkMeshes[i];
       m.visible = Y.intact > 0.05;
       const [x, z] = this.toLocal(Y.x, Y.y);
       const r = Y.r * cs * 0.82;
-      m.position.set(x, LIQ_Y - r * 0.25, z);
+      m.position.set(x, this.liqY - r * 0.25, z);
       m.scale.set(r * (1 + (1 - Y.intact) * 0.3), r * 0.62 * Y.intact, r * (1 + (1 - Y.intact) * 0.3));
     });
     for (let i = bowl.yolks.length; i < this.yolkMeshes.length; i++) this.yolkMeshes[i].visible = false;

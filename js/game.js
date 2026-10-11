@@ -1,11 +1,12 @@
 import * as THREE from '../vendor/three.module.min.js';
-import { Bowl, Pan, scoreRun, clamp, sstep, lerp } from './sim.js';
+import { Bowl, Pan, scoreRun, clamp, sstep, lerp, MAX_EGGS } from './sim.js';
 import { World, SETS } from './world.js';
 import { woodTexture } from './textures.js';
 import { Stove, Pan3D, Chopsticks } from './pan3d.js';
 import { Bowl3D } from './bowl3d.js';
 import { Plate3D, surface } from './plate3d.js';
 import { Chef } from './chef.js';
+import { verdictQuote } from './verdict.js';
 import { Sound } from './audio.js';
 import { fetchBoard, submitScore } from './net.js';
 
@@ -20,7 +21,7 @@ $('#handle').addEventListener('focus', () => titleChef.say('Name. Then wash your
 
 // Camera spots, relative to each set's origin.
 const VIEWS = {
-  beat: { set: 'bowl', pos: V(0, 33, 27), at: V(0, 2, 0.5) },
+  beat: { set: 'bowl', pos: V(6.5, 40, 31), at: V(6.5, 1.5, 0.8) },
   cook: { set: 'stove', pos: V(0, 44, 19), at: V(0, 2, -1.5) },
   fold: { set: 'stove', pos: V(-26, 21, 14), at: V(0, 3, -3.5) },
   plate: { set: 'plate', pos: V(-30, 32, 30), at: V(0, 5, -4) },
@@ -189,40 +190,52 @@ $('#r-again').addEventListener('click', () => { $('#s-result').hidden = true; st
 function startBeat() {
   S.bowl = new Bowl((Math.random() * 1e9) | 0);
   S.pan = new Pan((Math.random() * 1e9) | 0);
-  S.roll = 0; S.kick = 0; S.submitted = false; S.result = null; S.tiltHeld = false;
+  S.roll = 0; S.kick = 0; S.submitted = false; S.result = null; S.tiltHeld = false; S.queuedEggs = 0;
   if (pan3d) pan3d.reset();
   if (plate3d) plate3d.reset();
-  $('#egg-n').textContent = '0/3';
+  $('#egg-n').textContent = '0';
   $('#b-crack').disabled = false;
+  if (bowl3d) bowl3d.resetCarton();
   $('#b-to-cook').disabled = true;
   $('#b-butter').disabled = false; $('#butter-g').textContent = '(10 g)';
   $('#b-pour').disabled = true; $('#b-to-fold').disabled = true; $('#b-to-plate').disabled = true;
   setStage('beat');
   iris(() => goView('beat', false));
   chef.say(`@${S.handle}. One omurice. I'm watching.`, 'sniff');
-  caption('Click the bowl to crack an egg');
+  caption('Click an egg in the carton to crack it');
 }
 
-function crackEgg() {
+// Crack the egg nearest `near` (a carton point), or the next one in the carton.
+// Clicks while an egg is mid-crack are queued, so quick clicking isn't lost.
+function crackEgg(near) {
   const b = S.bowl;
-  if (!b || b.eggs >= 3 || !bowl3d || bowl3d.crackBusy) return;
+  if (!b || !bowl3d) return;
+  if (bowl3d.crackBusy) {
+    if (b.eggs + 1 + S.queuedEggs < MAX_EGGS) S.queuedEggs++;
+    return;
+  }
+  if (b.eggs >= MAX_EGGS) return;
+  const from = bowl3d.takeEgg(near);
+  if (!from) return;
   const gx = (b.N - 1) / 2 + (Math.random() - 0.5) * 16, gy = (b.N - 1) / 2 + (Math.random() - 0.5) * 16;
   const [x, z] = bowl3d.toLocal(gx, gy);
   caption('');
+  $('#b-crack').disabled = true;
   bowl3d.crackAnim({ x, z }, () => sound.crack(), () => {
     sound.plop();
     eggLanded(b.crack(gx, gy));
-  });
+  }, from);
 }
 function eggLanded(res) {
   const b = S.bowl;
-  $('#egg-n').textContent = `${b.eggs}/3`;
+  $('#egg-n').textContent = String(b.eggs);
+  $('#b-crack').disabled = b.eggs >= MAX_EGGS;
+  $('#b-to-cook').disabled = false;
   if (res && res.shell) chef.say('I saw that.', 'sniff');
-  if (b.eggs === 3) {
-    $('#b-crack').disabled = true;
-    $('#b-to-cook').disabled = false;
-    caption('Drag in the bowl to beat. Click a bit of shell to pick it out.');
-  } else caption(`Crack another (${b.eggs}/3)`);
+  else if (b.eggs === MAX_EGGS) chef.say('The whole carton? Bold.', 'shock');
+  caption(b.eggs < MAX_EGGS
+    ? 'Crack another, or drag in the bowl to beat. Click shell to pick it out.'
+    : 'Drag in the bowl to beat. Click shell to pick it out.');
 }
 $('#b-crack').addEventListener('click', () => { sound.init(); crackEgg(); });
 $('#b-to-cook').addEventListener('click', () => {
@@ -313,8 +326,10 @@ function startPlate() {
   holdOff();
   sound.sizzle(0, 0); sound.hiss(0);
   const R = pan.rollR;
+  const eggScale = Math.cbrt(S.bowl.eggs / 3);
   S.spec = {
-    L: 7.0 * (0.86 + 0.14 * R), A: lerp(1.1, 2.2, R),
+    // Sized for three eggs; more or less egg scales it by volume.
+    L: 7.0 * (0.86 + 0.14 * R) * eggScale, A: lerp(1.1, 2.2, R) * eggScale,
     dm: S.finalAgg.dm, br: S.finalAgg.br, cu: (pan.stats.atRoll || S.finalAgg).cu,
     tears: pan.tears, creases: pan.creases,
   };
@@ -379,20 +394,12 @@ function judgeTick(dt) {
   }
   if (t > 6.2 && S.stage === 'judge') {
     S.result = scoreRun({
-      mix: S.bowl.mixedness(), foam: S.bowl.foamLevel(), shells: S.pan.shellsInEgg,
+      eggs: S.bowl.eggs, mix: S.bowl.mixedness(), foam: S.bowl.foamLevel(), shells: S.pan.shellsInEgg,
       pan: S.pan, panTime: S.panTime, plateOffset: S.plateOffset, dmFinal: S.dmFinal,
       rolledR: S.pan.rollR, coverage: plate3d.coverage(),
     });
     showResult(S.result);
   }
-}
-
-function verdictQuote(score) {
-  if (score > 90) return '“You start Monday. Bring your own chopsticks.”';
-  if (score >= 85) return '“Close. Very close. Come back next week.”';
-  if (score >= 70) return '“You can cook. That wasn’t this omelette, though.”';
-  if (score >= 50) return '“We’ll keep your application on file.”';
-  return '“Have you considered washing dishes?”';
 }
 
 function showResult(res) {
@@ -429,8 +436,11 @@ function showResult(res) {
   for (const c of res.caps) {
     const li = document.createElement('li'); li.className = 'cap'; li.textContent = c; ul.appendChild(li);
   }
+  // On Vercel, share /s/<score>/<handle>: its preview is a scorecard image
+  // (api/og.js). As an Artifact there's no server, so share the page itself.
   const su = document.getElementById('share-url');
-  const url = (su && su.dataset.url) || location.origin + location.pathname;
+  const bd = res.sections.map(sec => Math.round(sec.pts)).join(',');
+  const url = (su && su.dataset.url) || `${location.origin}/s/${res.total}/${encodeURIComponent(S.handle)}?b=${bd}`;
   const text = hired
     ? `I scored ${res.total}/100 at the Hanjuku-tei omurice trial and got HIRED 🍳 Can you cook the perfect split omelette?`
     : `I scored ${res.total}/100 at the Hanjuku-tei omurice trial. Not hired 🥲 Can you cook the perfect split omelette?`;
@@ -496,7 +506,10 @@ cv.addEventListener('pointerdown', e => {
   P.down = true; P.last = null; P.lastT = performance.now(); P.vx = P.vy = 0;
   if (S.stage === 'beat' && S.bowl) {
     const b = S.bowl;
-    if (b.eggs < 3) { crackEgg(); P.down = false; return; }
+    // The carton: crack the egg under the cursor.
+    const cp = world.hitLocalPlane(e.clientX, e.clientY, bowl3d.group, bowl3d.cartonTopY());
+    if (bowl3d.overCarton(cp)) { crackEgg(cp); P.down = false; return; }
+    if (!b.eggs) { P.down = false; return; }
     const h = bowlHit(e);
     if (h && b.removeShellAt(h.cell[0], h.cell[1])) {
       sound.ding();
@@ -608,6 +621,7 @@ function update(dt) {
   if (st === 'beat' && S.bowl) {
     S.bowl.step(dt);
     bowl3d.update(S.bowl, S.t, dt);
+    if (S.queuedEggs > 0 && !bowl3d.crackBusy) { S.queuedEggs--; crackEgg(); }
   }
   const pan = S.pan;
   if ((st === 'cook' || st === 'fold') && pan) {

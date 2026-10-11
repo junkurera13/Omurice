@@ -116,10 +116,11 @@ export class Flow {
 }
 
 /* ------------------------------------------------------------------ */
-/* Bowl: crack three eggs and beat them.                               */
+/* Bowl: crack up to five eggs and beat them.                          */
 /* ------------------------------------------------------------------ */
 
 export const BN = 64;
+export const MAX_EGGS = 6;   // a full carton; three is the right call
 export class Bowl {
   constructor(seed = 7) {
     const N = BN; this.N = N;
@@ -143,7 +144,7 @@ export class Bowl {
     this.norm = 1;
   }
   crack(x, y) {
-    if (this.eggs >= 3) return null;
+    if (this.eggs >= MAX_EGGS) return null;
     const N = this.N, c = this.c;
     // Keep the yolk inside the pool.
     const dx = x - c, dy = y - c, r = Math.hypot(dx, dy), lim = this.R * 0.55;
@@ -165,7 +166,9 @@ export class Bowl {
       this.shells.push(shell);
     }
     this.norm = 1 / Math.max(0.05, this.mean());
-    if (this.eggs === 3) this.std0 = this.std();
+    // Streakiness of the bowl before beating: the yardstick for mixedness.
+    // Kept at its worst so beating between cracks still counts.
+    this.std0 = Math.max(this.std0, this.std());
     return { shell };
   }
   removeShellAt(x, y) {
@@ -185,7 +188,7 @@ export class Bowl {
     return Math.sqrt(s / m);
   }
   mixedness() {
-    if (this.eggs < 3 || !this.std0) return 0;
+    if (!this.eggs || !this.std0) return 0;
     return clamp(1 - this.std() / this.std0, 0, 1);
   }
   foamLevel() {
@@ -265,7 +268,7 @@ export class Bowl {
 
 export const PN = 84;
 export const KNOB_TEMPS = [22, 135, 180, 245]; // off, low, medium, high: where the pan settles
-export const EGG_ML = 150;                     // three large eggs
+export const EGG_ML = 50;                      // one large egg, out of the shell
 
 export class Pan {
   constructor(seed = 3) {
@@ -350,7 +353,7 @@ export class Pan {
     if (this.pourTime !== null) return;
     this.bowl = bowl;
     this.pourTime = this.time;
-    this.pourTotal = (EGG_ML * 1000) / this.cellArea;
+    this.pourTotal = (EGG_ML * (bowl ? bowl.eggs : 3) * 1000) / this.cellArea;
     this.pourLeft = this.pourTotal;
     this.pourX = x; this.pourY = y;
     this.shellsInEgg = bowl ? bowl.shells.length : 0;
@@ -592,7 +595,7 @@ const band = (x, lo, hi, soft) => {
 // the cook actually did. r: { mix, foam, shells, pan, panTime (s in pan),
 // plateOffset (cm), dmFinal, rolledR, coverage (0..1 of the rice covered) }
 export const RUBRIC = [
-  { key: 'prep', label: 'Egg prep', max: 10, items: ['Clean crack, no shell', 'Beaten evenly', 'Not over-whipped'] },
+  { key: 'prep', label: 'Egg prep', max: 10, items: ['Right number of eggs', 'Clean crack, no shell', 'Beaten evenly', 'Not over-whipped'] },
   { key: 'heat', label: 'Heat & butter', max: 15, items: ['Amount of butter', 'Pan temperature at the pour', 'Butter condition at the pour', 'No smoke'] },
   { key: 'scramble', label: 'Scramble', max: 15, items: ['Started stirring straight away', 'Stirred enough while wet', 'Small, even curds', 'Stopped before it set'] },
   { key: 'control', label: 'Cook control', max: 10, items: ['Outside colour', 'Time in the pan'] },
@@ -611,10 +614,20 @@ export function scoreRun(r) {
   const item = (sec, label, pts, max, note) => (S[sec] = S[sec] || []).push({ label, pts: Math.round(clamp(pts, 0, max) * 10) / 10, max, note });
   const pct = x => Math.round(x * 100) + '%';
 
-  // 1. Egg prep (10)
-  item('prep', 'Clean crack, no shell', r.shells ? 0 : 3, 3, r.shells ? `${r.shells} piece${r.shells > 1 ? 's' : ''} of shell went into the pan.` : 'No shell in the egg.');
-  item('prep', 'Beaten evenly', 5 * sstep(0.6, 0.92, r.mix), 5, `Evenness ${pct(r.mix)}. ${r.mix > 0.92 ? 'No white streaks.' : 'Streaks of white left.'}`);
-  item('prep', 'Not over-whipped', 2 * (1 - sstep(0.2, 0.5, r.foam)), 2, r.foam > 0.35 ? 'Frothy. Air bubbles in the egg.' : 'Smooth, not frothy.');
+  // 1. Egg prep (10). A 20 cm pan takes three eggs: two is thin and hard to
+  // keep molten, four or more won't roll into a neat football.
+  {
+    const n = r.eggs ?? 3;
+    const pts = n === 3 ? 3 : n === 2 || n === 4 ? 1.5 : 0;
+    const note = {
+      1: 'One egg. That’s a garnish.', 2: 'Two eggs. Too thin to stay soft inside.', 3: 'Three eggs. Right for the pan.',
+      4: 'Four eggs. Too much for one pan.', 5: 'Five eggs. That’s a family meal.', 6: 'The whole carton. Into one omelette.',
+    }[n] || `${n} eggs.`;
+    item('prep', 'Right number of eggs', pts, 3, note);
+  }
+  item('prep', 'Clean crack, no shell', r.shells ? 0 : 2, 2, r.shells ? `${r.shells} piece${r.shells > 1 ? 's' : ''} of shell went into the pan.` : 'No shell in the egg.');
+  item('prep', 'Beaten evenly', 4 * sstep(0.6, 0.92, r.mix), 4, `Evenness ${pct(r.mix)}. ${r.mix > 0.92 ? 'No white streaks.' : 'Streaks of white left.'}`);
+  item('prep', 'Not over-whipped', 1 * (1 - sstep(0.2, 0.5, r.foam)), 1, r.foam > 0.35 ? 'Frothy. Air bubbles in the egg.' : 'Smooth, not frothy.');
 
   // 2. Heat & butter (15)
   {

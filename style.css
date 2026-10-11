@@ -39,7 +39,7 @@ kbd { font: 11px var(--type); border: 2px solid currentColor; border-radius: 4px
 }
 
 /* ---------- header ---------- */
-.marquee { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; max-width: 1240px; margin: 0 auto 10px; }
+.marquee { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; max-width: 1240px; margin: 0 auto 48px; }
 .logo { font: 40px/1 var(--display); color: var(--cream); letter-spacing: .02em; text-shadow: 3px 3px 0 var(--red), 6px 6px 0 var(--ink); -webkit-text-stroke: 1.5px var(--ink); }
 .logo-o { display: inline-block; transform: rotate(-8deg); }
 .tag { font: 15px var(--deco); color: var(--ink); letter-spacing: .12em; text-transform: uppercase; }
@@ -51,9 +51,9 @@ kbd { font: 11px var(--type); border: 2px solid currentColor; border-radius: 4px
 .chip:hover, .chip:focus-visible { background: var(--ink); color: var(--cream); outline: none; }
 
 /* ---------- layout ---------- */
-.main { max-width: 1240px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 18px; align-items: start; }
+.main { width: 100%; max-width: 1240px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 52px; align-items: start; }
 .theater { min-width: 0; }
-.reel { list-style: none; display: flex; gap: 0; margin: 0 0 8px; padding: 0; counter-reset: step; }
+.reel { list-style: none; display: flex; gap: 0; margin: 0 0 24px; padding: 0; counter-reset: step; }
 .reel li {
   flex: 1; text-align: center; padding: 6px 4px 6px; font: 13px var(--deco); letter-spacing: .1em; text-transform: uppercase; color: rgba(23, 17, 12, .45);
   border-top: 3px solid rgba(23, 17, 12, .3); position: relative;
@@ -63,7 +63,7 @@ kbd { font: 11px var(--type); border: 2px solid currentColor; border-radius: 4px
 .reel li.now { color: var(--cream); background: var(--red); border-color: var(--ink); border-radius: 0 0 10px 10px; }
 
 .screenframe {
-  position: relative; aspect-ratio: 4 / 3; width: 100%; max-height: calc(100vh - 150px);
+  position: relative; aspect-ratio: 4 / 3; width: 100%; max-height: calc(100vh - 220px);
   border: 6px solid var(--ink); border-radius: 26px; overflow: hidden;
   box-shadow: 0 0 0 4px var(--cream), 0 0 0 9px var(--ink), 10px 12px 0 9px var(--ink);
   background: #0e0b09;
@@ -88,7 +88,7 @@ kbd { font: 11px var(--type); border: 2px solid currentColor; border-radius: 4px
 .loading { position: absolute; inset: 0; display: grid; place-items: center; font: 22px var(--deco); color: var(--paper2); letter-spacing: .1em; }
 
 /* ---------- side ---------- */
-.side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.side { display: flex; flex-direction: column; gap: 18px; min-width: 0; padding-top: 55px; }
 .chef-card { display: grid; grid-template-columns: 120px 1fr; gap: 6px; align-items: start; }
 .chef-wrap { width: 120px; height: 132px; }
 .chef { width: 100%; height: 100%; overflow: visible; }
@@ -290,7 +290,8 @@ kbd { font: 11px var(--type); border: 2px solid currentColor; border-radius: 4px
 
 /* ---------- small screens ---------- */
 @media (max-width: 900px) {
-  .main { grid-template-columns: 1fr; }
+  .main { grid-template-columns: 1fr; gap: 28px; }
+  .side { padding-top: 0; }
   .screenframe { max-height: none; border-radius: 18px; }
   .chef-card { grid-template-columns: 90px 1fr; }
   .chef-wrap { width: 90px; height: 100px; }
