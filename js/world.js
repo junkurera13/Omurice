@@ -13,7 +13,10 @@ export class World {
   constructor(canvas) {
     this.canvas = canvas;
     const r = (this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance', preserveDrawingBuffer: false }));
-    r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // 1.5x is sharp enough under the film grain; slow machines step down from there.
+    this.pr = Math.min(window.devicePixelRatio || 1, 1.5);
+    this.slowFrames = 0; this.frames = 0;
+    r.setPixelRatio(this.pr);
     r.outputColorSpace = THREE.SRGBColorSpace;
     r.toneMapping = THREE.ACESFilmicToneMapping;
     r.toneMappingExposure = 0.92;
@@ -54,6 +57,30 @@ export class World {
     this.focus = SETS.stove.clone();
     this.resize();
     window.addEventListener('resize', () => this.resize());
+  }
+
+  // Called once per drawn frame with the time since the last one. If more than
+  // a third of the last 90 frames missed ~40 fps, render at a lower resolution.
+  // Long gaps are the browser pausing a hidden window, not a slow GPU.
+  adapt(ms) {
+    if (ms > 250) return;
+    if (++this.frames < 90) { if (ms > 25) this.slowFrames++; return; }
+    if (this.slowFrames > 30 && this.pr > 1) {
+      this.pr = Math.max(1, this.pr - 0.25);
+      this.renderer.setPixelRatio(this.pr);
+      this.resize();
+    }
+    this.frames = this.slowFrames = 0;
+  }
+
+  // Compile every material's shaders off the main thread (where the browser
+  // supports it), so the first look at each set doesn't freeze the page.
+  precompile(groups) {
+    const was = groups.map(g => g.visible);
+    groups.forEach(g => (g.visible = true));
+    const done = () => groups.forEach((g, i) => (g.visible = was[i]));
+    if (!this.renderer.compileAsync) { this.renderer.compile(this.scene, this.camera); done(); return Promise.resolve(); }
+    return this.renderer.compileAsync(this.scene, this.camera).then(done, done);
   }
 
   resize() {

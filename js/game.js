@@ -50,6 +50,8 @@ try {
   bowl3d.group.visible = plate3d.group.visible = false;
   world.tameReflections();
   new ResizeObserver(() => world.resize()).observe($('#gl'));
+  // While the title card is up, compile shaders for every set in the background.
+  world.precompile([bowl3d.group, stove.group, plate3d.group]).then(() => S.set && showSet(S.set));
 } catch (e) {
   console.error(e);
   $('#loading').textContent = 'This browser can’t draw 3D (WebGL is off).';
@@ -149,6 +151,7 @@ function setStage(stage) {
   $$('#steps li').forEach((li, k) => { li.classList.toggle('now', k === i); li.classList.toggle('done', i > k || stage === 'result'); });
 }
 function showSet(name) {
+  S.set = name;
   bowl3d.group.visible = name === 'bowl';
   stove.group.visible = name === 'stove';
   plate3d.group.visible = name === 'plate';
@@ -212,6 +215,7 @@ function crackEgg(near) {
   if (!b || !bowl3d) return;
   if (bowl3d.crackBusy) {
     if (b.eggs + 1 + S.queuedEggs < MAX_EGGS) S.queuedEggs++;
+    $('#b-crack').disabled = b.eggs + 1 + S.queuedEggs >= MAX_EGGS;
     return;
   }
   if (b.eggs >= MAX_EGGS) return;
@@ -220,7 +224,6 @@ function crackEgg(near) {
   const gx = (b.N - 1) / 2 + (Math.random() - 0.5) * 16, gy = (b.N - 1) / 2 + (Math.random() - 0.5) * 16;
   const [x, z] = bowl3d.toLocal(gx, gy);
   caption('');
-  $('#b-crack').disabled = true;
   bowl3d.crackAnim({ x, z }, () => sound.crack(), () => {
     sound.plop();
     eggLanded(b.crack(gx, gy));
@@ -229,7 +232,7 @@ function crackEgg(near) {
 function eggLanded(res) {
   const b = S.bowl;
   $('#egg-n').textContent = String(b.eggs);
-  $('#b-crack').disabled = b.eggs >= MAX_EGGS;
+  $('#b-crack').disabled = b.eggs + S.queuedEggs >= MAX_EGGS;
   $('#b-to-cook').disabled = false;
   if (res && res.shell) chef.say('I saw that.', 'sniff');
   else if (b.eggs === MAX_EGGS) chef.say('The whole carton? Bold.', 'shock');
@@ -599,9 +602,14 @@ function chefWatch(pan) {
 
 let last = performance.now(), acc = 0, firstFrame = true;
 const DT = 1 / 60;
+// The title and result screens are opaque: nothing behind them needs drawing.
+const kitchenHidden = () => !$('#s-title').hidden || !$('#s-result').hidden;
 function frame(now) {
-  const el = Math.min(0.1, (now - last) / 1000);
+  const ms = now - last;
+  const el = Math.min(0.1, ms / 1000);
   last = now;
+  requestAnimationFrame(frame);
+  if (kitchenHidden()) { acc = 0; return; }
   acc += el;
   let n = 0;
   while (acc >= DT && n < 4) { if (!S.paused) update(DT); acc -= DT; n++; }
@@ -609,9 +617,9 @@ function frame(now) {
   if (world) {
     world.update(el);
     world.render();
-    if (firstFrame) { firstFrame = false; $('#loading').hidden = true; }
+    if (firstFrame) firstFrame = false, $('#loading').hidden = true;
+    else world.adapt(ms);
   }
-  requestAnimationFrame(frame);
 }
 
 function update(dt) {

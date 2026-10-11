@@ -185,7 +185,10 @@ kbd { font: 11px var(--type); border: 2px solid currentColor; border-radius: 4px
 }
 .screen.title, .screen.result { background: #ffc61a; }
 .rays {
-  position: fixed; inset: -50%; pointer-events: none;
+  /* Just big enough to cover the screen at any angle: a square the size of its diagonal. */
+  position: fixed; left: 50%; top: 50%; pointer-events: none;
+  width: 142vmax; height: 142vmax; width: hypot(100vw, 100vh); height: hypot(100vw, 100vh);
+  translate: -50% -50%; will-change: transform;
   background: repeating-conic-gradient(from 0deg at 50% 50%, #ffdc3a 0 7deg, #ffc61a 7deg 14deg);
   animation: spin 40s linear infinite; opacity: .95;
 }
