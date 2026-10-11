@@ -3,7 +3,8 @@
 // as fast as its doneness allows.
 import * as THREE from '../vendor/three.module.min.js';
 import { lathe, gridGeometry, dataTexture } from './world.js';
-import { skinTextures, custardTextures, custardColor, valueNoise, fbm } from './textures.js';
+import { skinTextures, custardTextures, riceTextures, custardColor, valueNoise, fbm } from './textures.js';
+import { subsurface } from './materials.js';
 import { Flow, bilinear, clamp, sstep, lerp, rng } from './sim.js';
 
 export const RICE = { a: 8.2, b: 5.7, h: 4.6 };
@@ -73,17 +74,36 @@ export class Plate3D {
   buildRice() {
     const g = this.group, r = rng(77);
     // Base mound so no plate shows between grains.
-    const prof = [];
-    for (let k = 0; k <= 40; k++) { const rr = (k / 40) * RICE.a * 0.995; prof.push([Math.max(0.01, rr), riceTop(rr, 0) - 0.12]); }
-    prof.reverse();
-    const base = new THREE.Mesh(lathe(prof.map(([a, b]) => [a, b]), 96), new THREE.MeshPhysicalMaterial({ color: 0x9c2c12, roughness: 0.6, side: THREE.DoubleSide }));
-    base.scale.z = RICE.b / RICE.a;
+    const RS = RICE.a * 2.1;
+    const rt = riceTextures(RS);
+    const rings = 40, segs = 96;
+    const pos = [], uvs = [], idx = [];
+    for (let i = 0; i <= rings; i++) for (let s = 0; s <= segs; s++) {
+      const rr = (i / rings) * 0.995, th = (s / segs) * Math.PI * 2;
+      const x = Math.cos(th) * rr * RICE.a, z = Math.sin(th) * rr * RICE.b;
+      // Packed rice isn't smooth: a little lumpiness on the mound.
+      const lump = Math.sin(x * 3.1 + z * 1.7) * Math.sin(z * 2.9 - x * 1.3) * 0.06;
+      pos.push(x, riceTop(x, z) - 0.06 + lump * (1 - rr), z);
+      uvs.push(x / RS + 0.5, z / RS + 0.5);
+    }
+    for (let i = 0; i < rings; i++) for (let s = 0; s < segs; s++) {
+      const a = i * (segs + 1) + s, b = a + segs + 1;
+      idx.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+    const mg = new THREE.BufferGeometry();
+    mg.setIndex(idx);
+    mg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    mg.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    mg.computeVertexNormals();
+    const base = new THREE.Mesh(mg, subsurface(new THREE.MeshPhysicalMaterial({
+      map: rt.map, bumpMap: rt.bump, bumpScale: 2.2, roughness: 0.42, clearcoat: 0.35, clearcoatRoughness: 0.35, side: THREE.DoubleSide,
+    }), { color: [1, 0.45, 0.3], wrap: 0.4, back: 0.15 }));
     base.receiveShadow = true;
     g.add(base);
     // Grains of rice, each tinted by how much ketchup it caught.
-    const n = 3000;
+    const n = 2600;
     const grain = new THREE.SphereGeometry(1, 8, 5);
-    const mat = new THREE.MeshPhysicalMaterial({ roughness: 0.4, clearcoat: 0.3, clearcoatRoughness: 0.3 });
+    const mat = subsurface(new THREE.MeshPhysicalMaterial({ roughness: 0.38, clearcoat: 0.4, clearcoatRoughness: 0.3 }), { color: [1, 0.5, 0.35], wrap: 0.5, back: 0.25 });
     const im = new THREE.InstancedMesh(grain, mat, n);
     im.receiveShadow = true;
     const m4 = new THREE.Matrix4(), nrm = new THREE.Vector3(), t = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Color();
@@ -153,8 +173,9 @@ export class Plate3D {
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     this.omGeo = geo;
-    this.skinMat = new THREE.MeshPhysicalMaterial({ roughness: 0.42, clearcoat: 0.5, clearcoatRoughness: 0.3, sheen: 0.5, sheenColor: new THREE.Color(0xfff0c0), sheenRoughness: 0.5, bumpScale: 0.6 });
-    this.innerMat = new THREE.MeshPhysicalMaterial({ roughness: 0.15, clearcoat: 1, clearcoatRoughness: 0.08, side: THREE.BackSide });
+    // Satin, not shiny: the outside of a good omelette is soft and smooth.
+    this.skinMat = subsurface(new THREE.MeshPhysicalMaterial({ roughness: 0.48, clearcoat: 0.25, clearcoatRoughness: 0.4, bumpScale: 0.9 }));
+    this.innerMat = subsurface(new THREE.MeshPhysicalMaterial({ roughness: 0.15, clearcoat: 1, clearcoatRoughness: 0.08, side: THREE.BackSide }));
     this.skin = new THREE.Mesh(geo, this.skinMat);
     this.inner = new THREE.Mesh(geo, this.innerMat);
     for (const m of [this.skin, this.inner]) { m.castShadow = true; m.receiveShadow = true; m.visible = false; m.frustumCulled = false; this.group.add(m); }
@@ -164,7 +185,7 @@ export class Plate3D {
     this.cGeo = gridGeometry(G, SPAN);
     this.cRest = Float32Array.from(this.cGeo.attributes.position.array);
     this.cTex = dataTexture(G, false);   // alpha (green channel) = where custard is
-    this.cMat = new THREE.MeshPhysicalMaterial({ alphaMap: this.cTex, roughness: 0.2, clearcoat: 0.7, clearcoatRoughness: 0.12, alphaTest: 0.5, bumpScale: 1.4 });
+    this.cMat = subsurface(new THREE.MeshPhysicalMaterial({ alphaMap: this.cTex, roughness: 0.2, clearcoat: 0.7, clearcoatRoughness: 0.12, alphaTest: 0.5, bumpScale: 1.4 }), { color: [1, 0.5, 0.08], wrap: 0.6, back: 0.45 });
     // Custard texture tiles across the grid; set per dish in setCustardLook.
     const uv = this.cGeo.attributes.uv.array;
     this.cGeo.setAttribute('uv1', new THREE.BufferAttribute(Float32Array.from(uv), 2));
@@ -226,8 +247,8 @@ export class Plate3D {
     this.innerMat.color.set(0xffffff);
     this.innerMat.needsUpdate = true;
     const wet = 1 - sstep(0.5, 0.85, dm);
-    this.innerMat.roughness = lerp(0.7, 0.1, wet);
-    this.innerMat.clearcoat = lerp(0.05, 1, wet);
+    this.innerMat.roughness = lerp(0.7, 0.25, wet);
+    this.innerMat.clearcoat = lerp(0.05, 0.5, wet);
     this.om = { ...spec, s: 0, sv: 0, sT: 0, uk: -2, drop: 1, t: 0, open: false, emitted: 0 };
     this.mob0 = mobility(dm);
     const raw = sstep(0.42, 0.18, dm);
@@ -247,9 +268,10 @@ export class Plate3D {
     ct.map.repeat.set(3, 3); ct.bump.repeat.set(3, 3);
     this.cMat.map = ct.map; this.cMat.bumpMap = ct.bump; this.cMat.needsUpdate = true;
     const wet = 1 - sstep(0.5, 0.85, dm);
-    this.cMat.roughness = lerp(0.8, 0.16, wet);
-    this.cMat.clearcoat = lerp(0, 0.75, wet);
-    this.cMat.clearcoatRoughness = lerp(0.5, 0.1, wet);
+    // Wet custard: a soft sheen, not a mirror.
+    this.cMat.roughness = lerp(0.8, 0.3, wet);
+    this.cMat.clearcoat = lerp(0, 0.45, wet);
+    this.cMat.clearcoatRoughness = lerp(0.5, 0.22, wet);
   }
 
   // Head chef's cut: knife front moves from u=-1.05 to 1.05.

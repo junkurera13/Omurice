@@ -4,6 +4,7 @@ import { lathe, gridGeometry, dataTexture } from './world.js';
 import { woodTexture } from './textures.js';
 import { bilinear, clamp, sstep, lerp, BN } from './sim.js';
 import { rawEggRGB } from './pan3d.js';
+import { subsurface } from './materials.js';
 
 const M = 110;
 const LIQ_Y = 2.9;   // liquid surface height inside the bowl (cm)
@@ -36,7 +37,7 @@ export class Bowl3D {
     this.geo = gridGeometry(M, LIQ_R * 2);
     this.rest = Float32Array.from(this.geo.attributes.position.array);
     this.tex = dataTexture(M);
-    this.mat = new THREE.MeshPhysicalMaterial({ map: this.tex, roughness: 0.08, clearcoat: 1, clearcoatRoughness: 0.04, transparent: true, depthWrite: true });
+    this.mat = subsurface(new THREE.MeshPhysicalMaterial({ map: this.tex, roughness: 0.08, clearcoat: 1, clearcoatRoughness: 0.04, transparent: true, depthWrite: true }));
     this.liquid = new THREE.Mesh(this.geo, this.mat);
     this.liquid.position.y = LIQ_Y; this.liquid.visible = false; this.liquid.receiveShadow = true;
     g.add(this.liquid);
@@ -48,6 +49,9 @@ export class Bowl3D {
     this.dropT = -1;
     // Floating shell bits.
     this.bits = [];
+    this.yolkGeo = new THREE.SphereGeometry(1, 40, 24, 0, Math.PI * 2, 0, Math.PI / 2);
+    this.yolkMat = subsurface(new THREE.MeshPhysicalMaterial({ color: 0xe8780a, roughness: 0.2, clearcoat: 0.6, clearcoatRoughness: 0.08, envMapIntensity: 0.4 }), { color: [1, 0.45, 0.05], wrap: 0.6, back: 0.5 });
+    this.yolkMeshes = [];
     this.bitGeo = new THREE.SphereGeometry(0.9, 10, 6, 0, Math.PI * 0.7, 0, Math.PI * 0.4);
   }
 
@@ -83,6 +87,21 @@ export class Bowl3D {
       this.bits[i].position.set(x, LIQ_Y + 0.12 + Math.sin(t * 2 + i) * 0.03, z);
       this.bits[i].rotation.set(Math.PI, s.rot, 0.2);
     });
+    // Unbroken yolks: glossy domes that slump as the chopsticks break them.
+    while (this.yolkMeshes.length < bowl.yolks.length) {
+      const m = new THREE.Mesh(this.yolkGeo, this.yolkMat);
+      m.castShadow = true; this.group.add(m); this.yolkMeshes.push(m);
+    }
+    const cs = (2 * LIQ_R) / (BN - 1);
+    bowl.yolks.forEach((Y, i) => {
+      const m = this.yolkMeshes[i];
+      m.visible = Y.intact > 0.05;
+      const [x, z] = this.toLocal(Y.x, Y.y);
+      const r = Y.r * cs * 0.82;
+      m.position.set(x, LIQ_Y - r * 0.25, z);
+      m.scale.set(r * (1 + (1 - Y.intact) * 0.3), r * 0.62 * Y.intact, r * (1 + (1 - Y.intact) * 0.3));
+    });
+    for (let i = bowl.yolks.length; i < this.yolkMeshes.length; i++) this.yolkMeshes[i].visible = false;
     if (!bowl.eggs) { this.liquid.visible = false; return; }
     this.liquid.visible = true;
     const pos = this.geo.attributes.position.array, d = this.tex.image.data;
@@ -94,12 +113,7 @@ export class Bowl3D {
       const inside = sstep(bowl.R + 0.2, bowl.R - 0.6, r);
       const yk = bilinear(bowl.yk, BN, BN, gx, gy) * bowl.norm;
       const foam = bilinear(bowl.foam, BN, BN, gx, gy);
-      let lift = 0;
-      for (const Y of bowl.yolks) {
-        if (Y.intact <= 0) continue;
-        const dd = Math.hypot(gx - Y.x, gy - Y.y);
-        if (dd < Y.r) lift += Math.sqrt(1 - (dd / Y.r) ** 2) * 0.55 * Y.intact;
-      }
+      const lift = 0;
       const c = rawEggRGB(clamp(yk, 0, 3));
       const fz = clamp(foam * 1.5, 0, 0.6);
       d[o] = lerp(c[0], 252, fz); d[o + 1] = lerp(c[1], 236, fz); d[o + 2] = lerp(c[2], 190, fz);

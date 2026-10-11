@@ -94,19 +94,26 @@ export function skinTextures(br, seed = 4, tears = 0) {
   const ctx = cv.getContext('2d'), btx = bv.getContext('2d');
   const img = ctx.createImageData(S, S), bimg = btx.createImageData(S, S);
   const n1 = fbm(S, seed, 5, 96), n2 = valueNoise(S, 5, seed + 3), n3 = valueNoise(S, 2.2, seed + 5);
+  const wn = fbm(S, seed + 9, 3, 40);
+  const wrinkle = new Float32Array(S * S);
+  for (let k = 0; k < S * S; k++) wrinkle[k] = sstep(0.04, 0, Math.abs(wn[k] - 0.5)) * 0.8;
   const b = clamp(br, 0, 1.2);
   for (let k = 0; k < S * S; k++) {
     // Base: pale butter yellow with soft mottling.
-    let r = 250, g = 204 + (n1[k] - 0.5) * 22, bl = 72 + (n1[k] - 0.5) * 30;
-    // Faint lighter streaks where the skin stretched over curds.
-    const st = sstep(0.62, 0.8, n2[k]) * 0.4;
-    r = lerp(r, 255, st); g = lerp(g, 232, st); bl = lerp(bl, 150, st);
+    // Bright lemon-yellow, a touch more orange where it's thicker.
+    let r = 247, g = 190 + (n1[k] - 0.5) * 26, bl = 22 + (n1[k] - 0.5) * 22;
+    const st = sstep(0.62, 0.8, n2[k]) * 0.25;
+    r = lerp(r, 252, st); g = lerp(g, 212, st); bl = lerp(bl, 70, st);
     // Browning: blotches grow and darken with heat.
     const spot = sstep(1 - b * 0.55, 1.02 - b * 0.4, n1[k] * 0.7 + n3[k] * 0.3) * Math.min(1, b * 1.6);
     r = lerp(r, 176, spot); g = lerp(g, 112, spot); bl = lerp(bl, 42, spot);
     const o = k * 4;
     img.data[o] = r; img.data[o + 1] = g; img.data[o + 2] = bl; img.data[o + 3] = 255;
-    const h = 128 + (n2[k] - 0.5) * 70 + (n3[k] - 0.5) * 40;
+    // Fine wrinkles where the skin folded: ridged noise, stretched along
+    // the length of the omelette (u runs along it).
+    const kx = k % S, ky = (k / S) | 0;
+    const wr = wrinkle[((ky) % S) * S + ((kx >> 2) % S)];
+    const h = 128 + (n2[k] - 0.5) * 30 + (n3[k] - 0.5) * 16 - wr * 70;
     bimg.data[o] = bimg.data[o + 1] = bimg.data[o + 2] = h; bimg.data[o + 3] = 255;
   }
   ctx.putImageData(img, 0, 0); btx.putImageData(bimg, 0, 0);
@@ -128,12 +135,12 @@ export function skinTextures(br, seed = 4, tears = 0) {
 // Colour of the egg's inside by doneness. 0.2 raw, ~0.52 hanjuku, 0.9 dry.
 export function custardColor(dm) {
   const stops = [
-    [0.15, [236, 132, 12]],
-    [0.32, [244, 160, 18]],
-    [0.5, [247, 180, 34]],
-    [0.62, [246, 196, 62]],
-    [0.75, [242, 212, 104]],
-    [0.92, [234, 222, 158]],
+    [0.15, [230, 116, 6]],
+    [0.32, [238, 138, 8]],
+    [0.5, [244, 160, 16]],
+    [0.62, [246, 182, 38]],
+    [0.75, [242, 206, 92]],
+    [0.92, [234, 222, 152]],
   ];
   if (dm <= stops[0][0]) return stops[0][1];
   for (let i = 1; i < stops.length; i++) {
@@ -173,4 +180,37 @@ export function custardTextures(dm, cu = 0.5, seed = 8) {
   const map = canvasTex(cv), bump = canvasTex(bv, false);
   map.wrapS = map.wrapT = bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
   return { map, bump };
+}
+
+// Ketchup rice packed into a mould: thousands of glossy, slightly
+// translucent grains, painted once. Planar map over the mound (S cm wide).
+export function riceTextures(S_cm = 17, seed = 21) {
+  const S = 1024, cv = document.createElement('canvas'), bv = document.createElement('canvas');
+  cv.width = bv.width = S; cv.height = bv.height = S;
+  const ctx = cv.getContext('2d'), btx = bv.getContext('2d');
+  ctx.fillStyle = 'rgb(122,30,10)'; ctx.fillRect(0, 0, S, S);
+  btx.fillStyle = 'rgb(40,40,40)'; btx.fillRect(0, 0, S, S);
+  const r = rng(seed);
+  const L = (0.64 / S_cm) * S, Wd = L * 0.4;
+  for (let i = 0; i < 11000; i++) {
+    const x = r() * S, y = r() * S, a = r() * Math.PI;
+    const k = r();
+    const base = k < 0.1 ? [236, 150, 100] : k < 0.85 ? [205 + r() * 20, 62 + r() * 22, 22 + r() * 12] : [168, 38, 16];
+    const s = 0.85 + r() * 0.3;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(a); ctx.scale(s, s);
+    const g = ctx.createRadialGradient(-L * 0.15, -Wd * 0.3, 0, 0, 0, L * 0.55);
+    g.addColorStop(0, `rgb(${Math.min(255, base[0] + 40)},${Math.min(255, base[1] + 40)},${Math.min(255, base[2] + 30)})`);
+    g.addColorStop(0.6, `rgb(${base[0]},${base[1]},${base[2]})`);
+    g.addColorStop(1, `rgb(${base[0] * 0.7},${base[1] * 0.6},${base[2] * 0.6})`);
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.ellipse(0, 0, L / 2, Wd / 2, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    btx.save(); btx.translate(x, y); btx.rotate(a); btx.scale(s, s);
+    const bg = btx.createRadialGradient(0, 0, 0, 0, 0, L * 0.5);
+    bg.addColorStop(0, 'rgb(235,235,235)'); bg.addColorStop(1, 'rgb(70,70,70)');
+    btx.fillStyle = bg;
+    btx.beginPath(); btx.ellipse(0, 0, L / 2, Wd / 2, 0, 0, Math.PI * 2); btx.fill();
+    btx.restore();
+  }
+  return { map: canvasTex(cv), bump: canvasTex(bv, false) };
 }

@@ -19,7 +19,7 @@ const chef = new Chef($('#chef'), $('#bubble'));
 // Camera spots, relative to each set's origin.
 const VIEWS = {
   beat: { set: 'bowl', pos: V(0, 33, 27), at: V(0, 2, 0.5) },
-  cook: { set: 'stove', pos: V(0, 40, 27), at: V(0, 2, -0.5) },
+  cook: { set: 'stove', pos: V(0, 44, 19), at: V(0, 2, -1.5) },
   fold: { set: 'stove', pos: V(-26, 21, 14), at: V(0, 3, -3.5) },
   plate: { set: 'plate', pos: V(0, 40, 33), at: V(0, 1.5, 0.5) },
   judge: { set: 'plate', pos: V(-5, 21, 28), at: V(0, 3.6, 0.3) },
@@ -197,7 +197,8 @@ function startBeat() {
   $('#m-fold').style.width = '0%';
   $('#b-butter').disabled = false; $('#butter-g').textContent = '(10 g)';
   $('#b-pour').disabled = true; $('#b-to-fold').disabled = true; $('#b-to-plate').disabled = true;
-  iris(() => { setStage('beat'); goView('beat', false); });
+  setStage('beat');
+  iris(() => goView('beat', false));
   chef.say(`@${S.handle}, is it? Three eggs. Beat them smooth. No shell.`, 'sniff');
   caption('Click the bowl to crack an egg');
 }
@@ -228,7 +229,8 @@ $('#b-to-cook').addEventListener('click', () => {
 /* ------------------------------------------------------------------ */
 
 function startCook() {
-  iris(() => { setStage('cook'); goView('cook', false); });
+  setStage('cook');
+  iris(() => goView('cook', false));
   setKnob(0);
   $('#b-pour').disabled = false;
   chef.say('Light the burner. Butter. Pour when it foams. Then scramble like you mean it.', 'neutral');
@@ -313,7 +315,8 @@ function startPlate() {
     dm: S.finalAgg.dm, br: S.finalAgg.br, cu: (pan.stats.atRoll || S.finalAgg).cu,
     tears: pan.tears, creases: pan.creases,
   };
-  iris(() => { setStage('plate'); goView('plate', false); });
+  setStage('plate');
+  iris(() => goView('plate', false));
   chef.say(R < 0.4 ? 'That isn’t folded. Put it on the rice anyway.' : 'Seam down, in the middle of the rice.', R < 0.4 ? 'angry' : 'neutral');
   caption('Click the rice where it should land');
 }
@@ -392,8 +395,8 @@ function showResult(res) {
   st.textContent = hired ? 'HIRED!' : 'NOT HIRED';
   st.className = 'stamp boil ' + (hired ? 'hired' : 'fired');
   const sc = $('#s-result');
-  sc.style.setProperty('--rc1', hired ? '#e2a823' : '#7d241e');
-  sc.style.setProperty('--rc2', hired ? '#d1931a' : '#5e1a15');
+  sc.style.setProperty('--rc1', hired ? '#ffdc3a' : '#d6402f');
+  sc.style.setProperty('--rc2', hired ? '#ffc61a' : '#b8322a');
   $('#r-quote').textContent = verdictQuote(res.total);
   const ul = $('#r-lines');
   ul.innerHTML = '';

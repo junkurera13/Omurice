@@ -3,20 +3,21 @@ import * as THREE from '../vendor/three.module.min.js';
 import { lathe, gridGeometry, dataTexture } from './world.js';
 import { steelTexture, softSprite, valueNoise } from './textures.js';
 import { bilinear, clamp, sstep, lerp, PN } from './sim.js';
+import { subsurface } from './materials.js';
 
 const M = 132;                 // render grid for the egg
 const FLOOR = 0.04;            // egg sits just above the pan floor (cm)
 
 export function rawEggRGB(y01) {
   // Raw colour by yolk share: clear-ish white -> beaten -> deep yolk.
-  if (y01 < 1) return [lerp(236, 246, y01), lerp(228, 158, y01), lerp(196, 18, y01)];
+  if (y01 < 1) return [lerp(236, 240, y01), lerp(228, 146, y01), lerp(196, 10, y01)];
   const u = Math.min(1, (y01 - 1) / 2);
-  return [lerp(248, 252, u), lerp(170, 128, u), lerp(30, 6, u)];
+  return [lerp(240, 244, u), lerp(146, 118, u), lerp(10, 4, u)];
 }
 export function setEggRGB(y01) {
-  if (y01 < 1) return [lerp(246, 250, y01), lerp(242, 206, y01), lerp(228, 70, y01)];
+  if (y01 < 1) return [lerp(246, 249, y01), lerp(242, 194, y01), lerp(228, 34, y01)];
   const u = Math.min(1, (y01 - 1) / 2);
-  return [252, lerp(206, 184, u), lerp(70, 40, u)];
+  return [248, lerp(194, 176, u), lerp(34, 20, u)];
 }
 
 export class Stove {
@@ -28,7 +29,7 @@ export class Stove {
     const steel = steelTexture();
     steel.repeat.set(3, 3);
     // Stainless range top.
-    const top = new THREE.Mesh(new THREE.PlaneGeometry(90, 70), new THREE.MeshPhysicalMaterial({ color: 0x3b3d42, map: steel, metalness: 0.75, roughness: 0.38, clearcoat: 0.2 }));
+    const top = new THREE.Mesh(new THREE.PlaneGeometry(90, 70), new THREE.MeshPhysicalMaterial({ color: 0x18191b, map: steel, metalness: 0.3, roughness: 0.3, clearcoat: 0.7, clearcoatRoughness: 0.15 }));
     top.rotation.x = -Math.PI / 2; top.receiveShadow = true;
     g.add(top);
     // Burner: cap and ring.
@@ -119,19 +120,21 @@ export class Pan3D {
     this.colTex = dataTexture(M);
     this.roughTex = dataTexture(M, false);
     this.skinTex = dataTexture(M);
-    this.topMat = new THREE.MeshPhysicalMaterial({
+    this.topMat = subsurface(new THREE.MeshPhysicalMaterial({
       map: this.colTex, roughnessMap: this.roughTex, clearcoatMap: this.roughTex,
-      roughness: 1, clearcoat: 1, clearcoatRoughness: 0.12, alphaTest: 0.5, side: THREE.FrontSide,
-      sheen: 0.25, sheenColor: new THREE.Color(0xffe2a0), sheenRoughness: 0.6,
-    });
-    this.botMat = new THREE.MeshPhysicalMaterial({
-      map: this.skinTex, roughness: 0.45, clearcoat: 0.35, clearcoatRoughness: 0.3, alphaTest: 0.5, side: THREE.BackSide,
-    });
+      roughness: 1, clearcoat: 1, clearcoatRoughness: 0.1, alphaTest: 0.5, side: THREE.FrontSide,
+    }));
+    this.botMat = subsurface(new THREE.MeshPhysicalMaterial({
+      map: this.skinTex, roughness: 0.5, clearcoat: 0.2, clearcoatRoughness: 0.35, alphaTest: 0.5, side: THREE.BackSide,
+    }));
     this.top = new THREE.Mesh(this.geo, this.topMat);
     this.bot = new THREE.Mesh(this.geo, this.botMat);
     for (const m of [this.top, this.bot]) { m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false; m.visible = false; g.add(m); }
-    this.lumpN = valueNoise(M, 3.6, 21);
-    this.lumpN2 = valueNoise(M, 1.8, 22);
+    // Curds made by chopsticks are ribbons and folds, not round lumps:
+    // ridged noise gives long creamy ridges with wet channels between.
+    const n1 = valueNoise(M, 5, 21), n2 = valueNoise(M, 2.6, 22);
+    this.lumpN = n1.map(v => 1 - Math.abs(2 * v - 1));
+    this.lumpN2 = n2.map(v => 1 - Math.abs(2 * v - 1));
 
     // Butter.
     const butterM = new THREE.MeshPhysicalMaterial({ color: 0xfbe7a2, roughness: 0.42, sheen: 0.5, sheenColor: new THREE.Color(0xfff2c0) });
@@ -276,7 +279,7 @@ export class Pan3D {
         const zb = bilinear(pan.zb, N, N, gx, gy);
         // Curds stand up from the wet egg.
         const cn = this.lumpN[k] * 0.65 + this.lumpN2[k] * 0.35;
-        const lump = cu * sstep(0.32, 0.8, cn);
+        const lump = cu * sstep(0.55, 0.92, cn);
         const vis = clamp(dm * 0.85 + lump * 0.5, 0, 1.3);
         const done = sstep(0.22, 0.85, vis);
         const y01 = clamp(yk, 0, 3);
@@ -296,7 +299,7 @@ export class Pan3D {
         // Skin side: pale yellow, browned where hot.
         const sk = sstep(0.2, 0.9, db);
         const sb = clamp(br, 0, 1);
-        skin[o] = lerp(lerp(rc[0], 250, sk), 168, sb); skin[o + 1] = lerp(lerp(rc[1], 202, sk), 104, sb); skin[o + 2] = lerp(lerp(rc[2], 70, sk), 34, sb);
+        skin[o] = lerp(lerp(rc[0], 247, sk), 168, sb); skin[o + 1] = lerp(lerp(rc[1], 190, sk), 104, sb); skin[o + 2] = lerp(lerp(rc[2], 24, sk), 34, sb);
         skin[o + 3] = col[o + 3];
         // Height.
         const p3 = k * 3;
@@ -308,8 +311,11 @@ export class Pan3D {
           let x0 = rest[p3], z0 = rest[p3 + 2];
           const row = ri.rows[j];
           const rr = row.near ? row.r : row;
-          if (row.near || h < 0.4) { x0 = clamp(x0, rr[0], rr[1]); z0 = clamp(z0, ri.zF, ri.zN); }
+          const pinned = row.near || h < 0.4;
+          if (pinned) { x0 = clamp(x0, rr[0], rr[1]); z0 = clamp(z0, ri.zF, ri.zN); }
           this.curl(x0, z0, h * cmPerMm, roll, ri, pos, p3, kick);
+          // Tuck the empty skirt under the egg so no slivers show.
+          if (pinned) pos[p3 + 1] -= 0.4;
         }
       }
     }
