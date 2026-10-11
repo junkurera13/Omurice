@@ -320,7 +320,7 @@ export class Pan {
     this.stats = {
       pourTemp: null, butterAtPour: null,
       stirEarly: 0, stirMid: 0, stirLate: 0,
-      atRoll: null, maxT: 24,
+      atRoll: null, maxT: 24, firstStir: null, smoked: false,
     };
   }
 
@@ -445,6 +445,7 @@ export class Pan {
     if (phaseDm < 0.32) this.stats.stirEarly += wk;
     else if (phaseDm < 0.45) this.stats.stirMid += wk;
     else this.stats.stirLate += wk;
+    if (this.stats.firstStir === null && work > 0.5) this.stats.firstStir = this.cookTime();
     return work;
   }
 
@@ -500,6 +501,7 @@ export class Pan {
       if (this.butterWater < 0.25 && this.T > 145) this.butterBrown += ((this.T - 145) / 45) * 0.04 * dt * (1.2 - this.butterWater * 2);
     }
     this.smoke = clamp((this.T - 205) / 50, 0, 1) * (this.butter > 0 && !this.poured ? 1 : 0.4) + (this.butterBrown > 0.8 && !this.poured ? 0.5 : 0);
+    if (this.smoke > 0.3) this.stats.smoked = true;
 
     // Pouring.
     if (this.pourLeft > 0) {
@@ -586,90 +588,100 @@ const band = (x, lo, hi, soft) => {
   return clamp(1 - d / soft, 0, 1);
 };
 
-export function scoreRun(r) {
-  // r: { mix, foam, shells, pan, plateOffset (cm), dmFinal, rolledR }
-  const lines = [];
-  const add = (key, label, pts, max, note) => lines.push({ key, label, pts: Math.round(clamp(pts, 0, max) * 10) / 10, max, note });
-  const pan = r.pan, bp = pan.stats.butterAtPour || { g: 0, state: 'none', brown: 0 };
-  const atRoll = pan.stats.atRoll || pan.aggregate();
+// The judges' scoresheet. Seven stations, every item measured from what
+// the cook actually did. r: { mix, foam, shells, pan, panTime (s in pan),
+// plateOffset (cm), dmFinal, rolledR, coverage (0..1 of the rice covered) }
+export const RUBRIC = [
+  { key: 'prep', label: 'Egg prep', max: 10, items: ['Clean crack, no shell', 'Beaten evenly', 'Not over-whipped'] },
+  { key: 'heat', label: 'Heat & butter', max: 15, items: ['Amount of butter', 'Pan temperature at the pour', 'Butter condition at the pour', 'No smoke'] },
+  { key: 'scramble', label: 'Scramble', max: 15, items: ['Started stirring straight away', 'Stirred enough while wet', 'Small, even curds', 'Stopped before it set'] },
+  { key: 'control', label: 'Cook control', max: 10, items: ['Outside colour', 'Time in the pan'] },
+  { key: 'fold', label: 'The fold', max: 15, items: ['Folded at the right moment', 'Finished football shape', 'Skin not torn', 'No cracking'] },
+  { key: 'plate', label: 'Plating', max: 5, items: ['Centred on the rice'] },
+  { key: 'inside', label: 'The inside', max: 30, items: ['Doneness: molten, not raw, not set', 'Colour of the custard', 'How it covers the rice'] },
+];
 
-  // The inside is what the dish is about: 45 points.
+export function scoreRun(r) {
+  const pan = r.pan, st = pan.stats;
+  const bp = st.butterAtPour || { g: 0, state: 'none', brown: 0 };
+  const atRoll = st.atRoll || pan.aggregate();
+  const finalAgg = pan.aggregate();
   const d = r.dmFinal;
+  const S = {};
+  const item = (sec, label, pts, max, note) => (S[sec] = S[sec] || []).push({ label, pts: Math.round(clamp(pts, 0, max) * 10) / 10, max, note });
+  const pct = x => Math.round(x * 100) + '%';
+
+  // 1. Egg prep (10)
+  item('prep', 'Clean crack, no shell', r.shells ? 0 : 3, 3, r.shells ? `${r.shells} piece${r.shells > 1 ? 's' : ''} of shell went into the pan.` : 'No shell in the egg.');
+  item('prep', 'Beaten evenly', 5 * sstep(0.6, 0.92, r.mix), 5, `Evenness ${pct(r.mix)}. ${r.mix > 0.92 ? 'No white streaks.' : 'Streaks of white left.'}`);
+  item('prep', 'Not over-whipped', 2 * (1 - sstep(0.2, 0.5, r.foam)), 2, r.foam > 0.35 ? 'Frothy. Air bubbles in the egg.' : 'Smooth, not frothy.');
+
+  // 2. Heat & butter (15)
+  {
+    const g = bp.g;
+    item('heat', 'Amount of butter', g === 0 ? 0 : g <= 20 ? 3 : 1.5, 3, g === 0 ? 'No butter.' : `${g} g${g > 20 ? ': greasy.' : '.'}`);
+    const T = st.pourTemp ?? 20;
+    item('heat', 'Pan temperature at the pour', 6 * band(T, 150, 190, 45), 6, `${Math.round(T)}°C when the egg went in.`);
+    const cond = { foaming: [4, 'Foaming.'], clear: [3, 'Foam had settled, still golden.'], melted: [1.5, 'Melted but not hot enough to foam.'], melting: [0.5, 'Still melting.'], brown: [1, 'Browned.'], burnt: [0, 'Burnt.'], none: [0, 'No butter.'] }[bp.state] || [0, '-'];
+    item('heat', 'Butter condition at the pour', cond[0], 4, cond[1]);
+    item('heat', 'No smoke', st.smoked ? 0 : 2, 2, st.smoked ? 'The pan smoked.' : 'Clean heat.');
+  }
+
+  // 3. Scramble (15)
+  {
+    const fs = st.firstStir;
+    item('scramble', 'Started stirring straight away', fs === null ? 0 : 3 * (1 - sstep(3, 7, fs)), 3, fs === null ? 'Never stirred.' : `First stir ${fs.toFixed(1)} s after the pour.`);
+    const early = st.stirEarly + st.stirMid * 0.6;
+    item('scramble', 'Stirred enough while wet', 4 * sstep(0.4, 2.2, early), 4, early < 0.4 ? 'Barely stirred.' : early < 1.6 ? 'Some stirring.' : 'Vigorous, all over the pan.');
+    const cq = band(atRoll.cu, 0.3, 0.85, 0.3) * (1 - sstep(0.25, 0.45, atRoll.cuStd));
+    item('scramble', 'Small, even curds', 4 * cq, 4, atRoll.cu < 0.15 ? 'A flat sheet, no curds.' : cq > 0.8 ? 'Small, soft, even curds.' : 'Uneven curds.');
+    item('scramble', 'Stopped before it set', 4 * (1 - sstep(0.3, 2.0, st.stirLate)), 4, st.stirLate > 1 ? 'Kept stirring after it set and broke the skin.' : 'Left it alone to set a skin.');
+  }
+
+  // 4. Cook control (10)
+  {
+    const br = finalAgg.br;
+    item('control', 'Outside colour', 6 * (1 - sstep(0.04, 0.45, br)), 6, br < 0.06 ? 'Pale yellow, no browning.' : br < 0.2 ? 'Light browning.' : br < 0.45 ? 'Brown patches.' : 'Browned like a pancake.');
+    const t = r.panTime;
+    item('control', 'Time in the pan', 4 * band(t, 15, 45, 20), 4, `${Math.round(t)} s from pour to plate.`);
+  }
+
+  // 5. The fold (15)
+  {
+    const rolled = r.rolledR >= 0.4;
+    const okMoment = st.atRoll ? band(st.atRoll.dm, 0.28, 0.55, 0.2) * sstep(0.35, 0.65, st.atRoll.db) : 0;
+    item('fold', 'Folded at the right moment', 4 * okMoment, 4, !st.atRoll ? 'Never folded.' : st.atRoll.dm < 0.28 ? 'Folded while still raw.' : st.atRoll.dm > 0.55 ? 'Folded too late, already set.' : 'Folded while soft on top, set underneath.');
+    item('fold', 'Finished football shape', 4 * sstep(0.4, 1, r.rolledR), 4, r.rolledR >= 1 ? 'A neat football.' : rolled ? 'Half folded, lopsided.' : 'Flat.');
+    item('fold', 'Skin not torn', rolled ? 4 * (1 - sstep(0.1, 0.9, pan.tears)) : 0, 4, !rolled ? '-' : pan.tears > 0.6 ? 'Torn open.' : pan.tears > 0.2 ? 'A small tear.' : 'Smooth, unbroken skin.');
+    item('fold', 'No cracking', rolled ? 3 * (1 - sstep(0.1, 0.8, pan.creases)) : 0, 3, !rolled ? '-' : pan.creases > 0.3 ? 'Cracked as it folded. Too firm.' : 'Folded cleanly.');
+  }
+
+  // 6. Plating (5)
+  item('plate', 'Centred on the rice', 5 * (1 - sstep(0.5, 3.5, r.plateOffset)), 5, `${r.plateOffset.toFixed(1)} cm off centre.`);
+
+  // 7. The inside (30): the reveal
   {
     let p;
-    if (d >= 0.45 && d <= 0.6) p = 45;
-    else if (d > 0.6) p = 45 * (1 - sstep(0.6, 0.84, d));
-    else p = 45 * (1 - sstep(0.45, 0.2, d));
-    let note;
-    if (d < 0.25) note = 'Raw. It ran straight off the rice and flooded the plate.';
-    else if (d < 0.38) note = 'Too wet. Thin egg ran down the rice and pooled on the plate.';
-    else if (d < 0.45) note = 'Slightly loose, a little ran off. Very close.';
-    else if (d <= 0.6) note = 'Golden, glossy, custardy. It slid open and coated the rice. Perfect hanjuku.';
-    else if (d < 0.7) note = 'A touch overcooked. It opened, but the centre had already set.';
-    else if (d < 0.82) note = 'Overcooked. Pale and firm inside, it barely flowed.';
-    else note = 'Cooked solid. It just split in two. That is not omurice.';
-    add('inside', 'The inside', p, 45, note);
+    if (d >= 0.45 && d <= 0.6) p = 20;
+    else if (d > 0.6) p = 20 * (1 - sstep(0.6, 0.84, d));
+    else p = 20 * (1 - sstep(0.45, 0.2, d));
+    const dn = d < 0.25 ? 'Raw. It flooded the plate.' : d < 0.38 ? 'Too wet. It ran off the rice.' : d < 0.45 ? 'Slightly loose.' : d <= 0.6 ? 'Molten and custardy. Perfect hanjuku.' : d < 0.7 ? 'Slightly overcooked. The centre had set.' : d < 0.82 ? 'Overcooked. Firm and pale.' : 'Cooked solid. It just split in two.';
+    item('inside', 'Doneness: molten, not raw, not set', p, 20, dn);
+    const colour = band(d, 0.42, 0.65, 0.25) * (0.6 + 0.4 * sstep(0.7, 0.92, r.mix)) * (1 - sstep(0.1, 0.5, finalAgg.br) * 0.5);
+    item('inside', 'Colour of the custard', 5 * colour, 5, colour > 0.85 ? 'Deep golden yellow.' : d > 0.65 ? 'Pale and dull.' : d < 0.4 ? 'Raw orange.' : r.mix < 0.8 ? 'Streaky.' : 'Close.');
+    const cov = r.coverage ?? 0;
+    item('inside', 'How it covers the rice', 5 * band(cov, 0.7, 1, 0.45) * (d < 0.3 ? 0.4 : 1), 5, `Covered ${pct(cov)} of the rice${d < 0.3 ? ', and pooled on the plate' : ''}.`);
   }
-  // Prep.
-  {
-    let p = 5 * sstep(0.55, 0.93, r.mix);
-    let note = r.mix > 0.93 ? 'Beaten smooth.' : r.mix > 0.75 ? 'Streaks of white left in.' : 'Barely beaten. You can see the whites.';
-    if (r.foam > 0.35) { p -= 1; note += ' Too much air whipped in.'; }
-    if (r.shells > 0) { p -= 2 * r.shells; note += ` Crunch. ${r.shells > 1 ? 'Shell pieces' : 'A piece of shell'} in the pan.`; }
-    add('prep', 'Beating', p, 5, note);
-  }
-  // Heat & butter.
-  {
-    const T = pan.stats.pourTemp ?? 20;
-    const band = (x, lo, hi, soft) => (x >= lo && x <= hi ? 1 : clamp(1 - (x < lo ? lo - x : x - hi) / soft, 0, 1));
-    let p = 6 * band(T, 150, 190, 45);
-    let note = T < 110 ? `Cold pan (${Math.round(T)}°C). The egg stewed.` : T < 150 ? `A little cool at ${Math.round(T)}°C.` : T <= 190 ? `Pan at ${Math.round(T)}°C. Good sizzle.` : `Scorching pan (${Math.round(T)}°C).`;
-    let b = 0;
-    if (bp.g >= 10 && bp.g <= 20) b += 2; else if (bp.g > 0) b += 1;
-    if (bp.state === 'foaming' || bp.state === 'clear') b += 2;
-    else if (bp.state === 'melted' || bp.state === 'melting') b += 1;
-    if (bp.state === 'brown') b -= 0.5;
-    if (bp.state === 'burnt') b -= 2;
-    if (bp.g === 0) note += ' No butter.';
-    else if (bp.state === 'burnt') note += ' Burnt butter.';
-    else if (bp.state === 'brown') note += ' The butter had browned.';
-    else if (bp.state === 'foaming') note += ' Poured on foaming butter.';
-    add('heat', 'Heat & butter', p + b, 10, note);
-  }
-  // Curds.
-  {
-    const band = (x, lo, hi, soft) => (x >= lo && x <= hi ? 1 : clamp(1 - (x < lo ? lo - x : x - hi) / soft, 0, 1));
-    const cuQ = band(atRoll.cu, 0.3, 0.85, 0.3);
-    const early = sstep(0.4, 2.2, pan.stats.stirEarly + pan.stats.stirMid * 0.6);
-    let p = 10 * (0.55 * cuQ + 0.45 * early) - 5 * sstep(0.3, 2.0, pan.stats.stirLate);
-    const note = atRoll.cu < 0.12 ? 'Never scrambled. A flat sheet, not soft curds.' : pan.stats.stirLate > 1.0 ? 'Kept stirring after it set and broke the skin.' : atRoll.cu < 0.3 ? 'Big, uneven curds.' : 'Small, soft curds.';
-    add('curds', 'Scramble', p, 10, note);
-  }
-  // Outside colour.
-  {
-    const brF = pan.aggregate().br;
-    const p = 10 * (1 - sstep(0.04, 0.45, brF));
-    const note = brF < 0.06 ? 'Pale yellow outside. No browning.' : brF < 0.2 ? 'Light browning on the outside.' : brF < 0.45 ? 'Brown patches outside.' : 'Browned like a pancake.';
-    add('color', 'Outside colour', p, 10, note);
-  }
-  // The fold.
-  {
-    const R = r.rolledR;
-    let p = 15 * (0.5 * sstep(0.4, 1, R) + 0.5) - Math.min(7, pan.tears * 4.5) - Math.min(5, pan.creases * 4);
-    if (R < 0.4) p = Math.min(p, 4);
-    let note = R < 0.4 ? 'Never folded. It went on the rice flat.' : R < 0.99 ? 'Half folded. Lopsided.' : 'Tapped into a neat football.';
-    if (pan.tears > 0.6) note += ' The skin tore.'; else if (pan.tears > 0.25) note += ' A small tear.';
-    if (pan.creases > 0.4) note += ' It cracked as it folded.';
-    add('fold', 'The fold', p, 15, note);
-  }
-  // Placement.
-  {
-    const off = r.plateOffset;
-    add('plate', 'Placement', 5 * (1 - sstep(0.5, 3.5, off)), 5, off < 0.8 ? 'Dead centre on the rice.' : off < 2 ? 'Slightly off centre.' : 'Off to the side.');
-  }
-  let total = Math.round(lines.reduce((s2, l) => s2 + l.pts, 0));
-  // A solid egg can't pass, however good the rest was.
-  if (d >= 0.82) total = Math.min(total, 55);
-  if (d < 0.25) total = Math.min(total, 60);
-  return { total: clamp(total, 0, 100), lines };
+
+  const sections = RUBRIC.map(sec => {
+    const items = S[sec.key] || [];
+    const pts = Math.round(items.reduce((a, b) => a + b.pts, 0) * 10) / 10;
+    return { key: sec.key, label: sec.label, max: sec.max, pts, items };
+  });
+  let total = Math.round(sections.reduce((a, b) => a + b.pts, 0));
+  const caps = [];
+  // A solid or raw centre can't pass, however good the rest was.
+  if (d >= 0.82 && total > 55) { total = 55; caps.push('Capped at 55: a solid egg is not omurice.'); }
+  if (d < 0.25 && total > 60) { total = 60; caps.push('Capped at 60: raw egg.'); }
+  return { total: clamp(total, 0, 100), sections, caps, lines: sections.map(s2 => ({ key: s2.key, label: s2.label, pts: s2.pts, max: s2.max })) };
 }

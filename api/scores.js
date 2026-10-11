@@ -5,7 +5,7 @@
 import { put, list } from '@vercel/blob';
 
 const NAME_RE = /^[\p{L}\p{N} _.@\-']{2,18}$/u;
-const MAX = { prep: 5, heat: 10, curds: 15, color: 15, roll: 15, inside: 25, plate: 5, slit: 10 };
+const MAX = { prep: 10, heat: 15, scramble: 15, control: 10, fold: 15, plate: 5, inside: 30 };
 
 const b64 = s => Buffer.from(s, 'utf8').toString('base64url');
 const unb64 = s => Buffer.from(s, 'base64url').toString('utf8');

@@ -1,5 +1,5 @@
 import * as THREE from '../vendor/three.module.min.js';
-import { Bowl, Pan, scoreRun, clamp, sstep, lerp } from './sim.js';
+import { Bowl, Pan, scoreRun, RUBRIC, clamp, sstep, lerp } from './sim.js';
 import { World, SETS } from './world.js';
 import { woodTexture } from './textures.js';
 import { Stove, Pan3D, Chopsticks } from './pan3d.js';
@@ -193,35 +193,39 @@ function startBeat() {
   $('#egg-n').textContent = '0/3';
   $('#b-crack').disabled = false;
   $('#b-to-cook').disabled = true;
-  $('#m-mix').style.width = '0%';
-  $('#m-fold').style.width = '0%';
   $('#b-butter').disabled = false; $('#butter-g').textContent = '(10 g)';
   $('#b-pour').disabled = true; $('#b-to-fold').disabled = true; $('#b-to-plate').disabled = true;
   setStage('beat');
   iris(() => goView('beat', false));
-  chef.say(`@${S.handle}, is it? Three eggs. Beat them smooth. No shell.`, 'sniff');
+  chef.say(`@${S.handle}. One omurice. I'm watching.`, 'sniff');
   caption('Click the bowl to crack an egg');
 }
 
 function crackEgg() {
   const b = S.bowl;
-  if (!b || b.eggs >= 3) return;
-  const res = b.crack((b.N - 1) / 2 + (Math.random() - 0.5) * 16, (b.N - 1) / 2 + (Math.random() - 0.5) * 16);
-  if (bowl3d) bowl3d.crackAnim();
-  sound.crack(); setTimeout(() => sound.plop(), 160);
+  if (!b || b.eggs >= 3 || !bowl3d || bowl3d.crackBusy) return;
+  const gx = (b.N - 1) / 2 + (Math.random() - 0.5) * 16, gy = (b.N - 1) / 2 + (Math.random() - 0.5) * 16;
+  const [x, z] = bowl3d.toLocal(gx, gy);
+  caption('');
+  bowl3d.crackAnim({ x, z }, () => sound.crack(), () => {
+    sound.plop();
+    eggLanded(b.crack(gx, gy));
+  });
+}
+function eggLanded(res) {
+  const b = S.bowl;
   $('#egg-n').textContent = `${b.eggs}/3`;
-  if (res && res.shell) chef.say('Shell! I saw that. Click it to fish it out.', 'angry');
+  if (res && res.shell) chef.say('I saw that.', 'sniff');
   if (b.eggs === 3) {
     $('#b-crack').disabled = true;
     $('#b-to-cook').disabled = false;
-    caption('Drag around the bowl in fast circles');
-    if (!b.shells.length) chef.say('Now beat. Quick circles. I want no white streaks.', 'neutral');
+    caption('Drag in the bowl to beat. Click a bit of shell to pick it out.');
   } else caption(`Crack another (${b.eggs}/3)`);
 }
 $('#b-crack').addEventListener('click', () => { sound.init(); crackEgg(); });
 $('#b-to-cook').addEventListener('click', () => {
   startCook();
-  if (S.bowl.shells.length) setTimeout(() => chef.say('You left shell in that bowl. I’ll remember.', 'angry'), 900);
+
 });
 
 /* ------------------------------------------------------------------ */
@@ -233,8 +237,8 @@ function startCook() {
   iris(() => goView('cook', false));
   setKnob(0);
   $('#b-pour').disabled = false;
-  chef.say('Light the burner. Butter. Pour when it foams. Then scramble like you mean it.', 'neutral');
-  caption('Turn the heat on and add butter');
+  chef.say('Your station.', 'sniff');
+  caption('Burner, butter and eggs are on the right. Drag in the pan to use the chopsticks.');
 }
 function setKnob(k) {
   if (S.pan) S.pan.setKnob(k);
@@ -256,7 +260,6 @@ $('#b-pour').addEventListener('click', () => {
   S.pan.startPour(S.bowl);
   $('#b-pour').disabled = true;
   $('#b-butter').disabled = true;
-  caption('Drag in the pan to scramble with the chopsticks');
   setTimeout(() => { if (S.stage === 'cook') caption(''); }, 4000);
   setTimeout(() => { if (S.stage === 'cook') $('#b-to-fold').disabled = false; }, 1600);
 });
@@ -271,8 +274,8 @@ function startFold() {
   goView('fold');
   panSticks.place(null);
   $('#b-to-plate').disabled = false;
-  chef.say('Tilt it away. Tap your wrist. Let it jump and roll over itself.', 'neutral');
-  caption('Hold TILT, then TAP until it’s a football');
+  chef.say('Show me your fold.', 'sniff');
+  caption('Hold TILT (W) to tilt the pan away. TAP (Space) knocks your wrist.');
 }
 const tiltBtn = $('#b-tilt');
 const holdOn = e => { e.preventDefault(); S.tiltHeld = true; tiltBtn.classList.add('held'); };
@@ -286,15 +289,12 @@ function doTap() {
   sound.tap();
   S.kick = 1;
   if (!r.ok) {
-    if (r.why === 'flat') chef.say('Tilt the pan first! It just jumps and falls back.', 'angry');
+    if (r.why === 'flat') chef.say('Hmph.', 'sniff');
     return;
   }
   caption('');
-  if (r.tear > 0.25) chef.say('Rrrip. The skin tore. Too wet underneath.', 'shock');
-  else if (r.crease > 0.25) chef.say('It’s cracking. That egg is getting firm.', 'angry');
-  else if (r.R >= 1) { chef.say('A football. Good. Onto the rice, quick.', 'happy'); caption('Now: “Onto the rice”'); }
-  else chef.say(['Again.', 'Good. Again.', 'Keep it rolling.', 'Tap!'][S.pan.rollTaps % 4], 'neutral');
-  $('#m-fold').style.width = Math.round(S.pan.rollR * 100) + '%';
+  if (r.tear > 0.25) chef.mood('shock');
+  else if (r.crease > 0.25) chef.mood('angry');
 }
 $('#b-to-plate').addEventListener('click', startPlate);
 
@@ -306,6 +306,7 @@ function startPlate() {
   const pan = S.pan;
   S.finalAgg = pan.aggregate();
   S.leftPanAt = S.t;
+  S.panTime = pan.cookTime();
   pan.setKnob(0);
   holdOff();
   sound.sizzle(0, 0); sound.hiss(0);
@@ -318,8 +319,8 @@ function startPlate() {
   setStage('plate');
   iris(() => { goView('plate', false); plate3d.aim(S.spec); });
   S.aimP = V(0, 0, 0);
-  chef.say(R < 0.4 ? 'That isn’t folded. Tip it on anyway.' : 'Over the middle of the rice. Then turn the pan over.', R < 0.4 ? 'angry' : 'neutral');
-  caption('Move the pan over the rice, then click to tip it out');
+  chef.say('Plate it.', 'sniff');
+  caption('Move the pan over the plate, then click to turn it over');
 }
 
 function hitPlate(cx, cy) {
@@ -358,11 +359,7 @@ function startJudge() {
   plate3d.om.drop = 0;
   S.judgeT = 0;
   S.reacted = false;
-  chef.say('Stand back. Let’s see what you made.', 'sniff');
-  S.result = scoreRun({
-    mix: S.bowl.mixedness(), foam: S.bowl.foamLevel(), shells: S.pan.shellsInEgg,
-    pan: S.pan, plateOffset: S.plateOffset, dmFinal: S.dmFinal, rolledR: S.pan.rollR,
-  });
+  chef.say('Stand back.', 'sniff');
 }
 
 function judgeTick(dt) {
@@ -378,7 +375,14 @@ function judgeTick(dt) {
     else if (d < 0.7) chef.say('Hmph. It opened, but the middle has set.', 'sniff');
     else chef.say('It’s SOLID. It just split in half! Terrible!', 'angry');
   }
-  if (t > 6.2 && S.stage === 'judge') showResult(S.result);
+  if (t > 6.2 && S.stage === 'judge') {
+    S.result = scoreRun({
+      mix: S.bowl.mixedness(), foam: S.bowl.foamLevel(), shells: S.pan.shellsInEgg,
+      pan: S.pan, panTime: S.panTime, plateOffset: S.plateOffset, dmFinal: S.dmFinal,
+      rolledR: S.pan.rollR, coverage: plate3d.coverage(),
+    });
+    showResult(S.result);
+  }
 }
 
 function verdictQuote(score) {
@@ -399,15 +403,29 @@ function showResult(res) {
   sc.style.setProperty('--rc1', hired ? '#ffdc3a' : '#d6402f');
   sc.style.setProperty('--rc2', hired ? '#ffc61a' : '#b8322a');
   $('#r-quote').textContent = verdictQuote(res.total);
+  // The judge's scoresheet: every station, every line item.
   const ul = $('#r-lines');
   ul.innerHTML = '';
-  for (const l of res.lines) {
+  const fmt = v => (Math.round(v * 10) / 10).toString();
+  for (const sec of res.sections) {
     const li = document.createElement('li');
-    if (l.key === 'inside') li.className = 'key';
-    const b = document.createElement('b'); b.textContent = l.label;
-    const p = document.createElement('span'); p.className = 'p'; p.textContent = `${Math.round(l.pts)}/${l.max}`;
-    const n = document.createElement('span'); n.className = 'n'; n.textContent = l.note;
-    li.append(b, p, n); ul.appendChild(li);
+    li.className = 'sec' + (sec.key === 'inside' ? ' key' : '');
+    const head = document.createElement('div'); head.className = 'sec-head';
+    const b = document.createElement('b'); b.textContent = sec.label;
+    const p = document.createElement('span'); p.className = 'p'; p.textContent = `${fmt(sec.pts)} / ${sec.max}`;
+    head.append(b, p);
+    const tbl = document.createElement('table');
+    for (const it of sec.items) {
+      const tr = document.createElement('tr');
+      const a = document.createElement('td'); a.className = 'il'; a.textContent = it.label;
+      const n = document.createElement('td'); n.className = 'in'; n.textContent = it.note;
+      const q = document.createElement('td'); q.className = 'ip'; q.textContent = `${fmt(it.pts)}/${it.max}`;
+      tr.append(a, n, q); tbl.appendChild(tr);
+    }
+    li.append(head, tbl); ul.appendChild(li);
+  }
+  for (const c of res.caps) {
+    const li = document.createElement('li'); li.className = 'cap'; li.textContent = c; ul.appendChild(li);
   }
   const su = document.getElementById('share-url');
   const url = (su && su.dataset.url) || location.origin + location.pathname;
@@ -480,7 +498,7 @@ cv.addEventListener('pointerdown', e => {
     const h = bowlHit(e);
     if (h && b.removeShellAt(h.cell[0], h.cell[1])) {
       sound.ding();
-      chef.say(b.shells.length ? 'There’s more in there.' : 'Good. Now beat.', b.shells.length ? 'sniff' : 'neutral');
+
       P.down = false;
     }
   } else if (S.stage === 'plate') {
@@ -554,32 +572,13 @@ const zoneArc = (a, b) => {
   const [x0, y0] = p(a), [x1, y1] = p(b);
   return `M${x0.toFixed(1)} ${y0.toFixed(1)} A54 54 0 0 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`;
 };
-$('#zone-good').setAttribute('d', zoneArc(150, 190));
-$('#zone-hot').setAttribute('d', zoneArc(225, 300));
 
 let lastSay = '';
-function chefWatch(pan, agg) {
-  let line = null, mood = 'neutral';
-  if (!pan.poured) {
-    const st = pan.butterState();
-    if (pan.smoke > 0.3) { line = 'Smoke! You’re burning my kitchen down!'; mood = 'angry'; }
-    else if (st === 'burnt') { line = 'Black butter. That’s burnt.'; mood = 'angry'; }
-    else if (st === 'brown') { line = 'Brown butter. Nutty. Wrong.'; mood = 'sniff'; }
-    else if (st === 'foaming') line = 'Foaming. Hear that crackle?';
-    else if (st === 'clear') line = 'Foam’s dying down. Don’t dawdle.';
-    else if (st === 'melting') line = pan.T < 45 ? 'Butter in a cold pan. Turn on the heat.' : 'Melting…';
-    else if (!pan.knob) line = 'The burner is off, cook.';
-    else if (pan.T < 120) line = 'Warming up.';
-    else if (!pan.butter) line = 'Hot pan, no butter?';
-  } else if (pan.pouring) line = 'Pour!';
-  else if (S.stage === 'cook') {
-    if (pan.T < 105) { line = 'No sizzle. The egg is just sitting there.'; mood = 'sniff'; }
-    else if (agg.dm < 0.14) line = agg.cu > 0.15 ? 'Keep scrambling! Little curds!' : 'Stir! Stir now!';
-    else if (agg.dm < 0.32) line = agg.cu > 0.2 ? 'Good curds. Top still wet.' : 'You’re not stirring. Stir!';
-    else if (agg.dm < 0.45) line = 'Wet scrambled egg. Stop stirring, let the skin set. Then fold.';
-    else if (agg.dm < 0.58) { line = 'It’s setting. Fold it NOW.'; mood = 'shock'; }
-    else { line = 'Too long! It’s cooking through!'; mood = 'angry'; }
-  } else if (S.stage === 'fold' && agg.dm > 0.62 && pan.rollR < 1) { line = 'Hurry, it’s cooking through!'; mood = 'angry'; }
+// The head chef watches in silence. He only reacts to disasters.
+function chefWatch(pan) {
+  let line = null, mood = 'angry';
+  if (pan.smoke > 0.3) line = 'Is that SMOKE?';
+  else if (!pan.poured && pan.butterState() === 'burnt') line = 'Smells burnt in here.';
   if (line && line !== lastSay) { lastSay = line; chef.say(line, mood); }
 }
 
@@ -590,7 +589,7 @@ function frame(now) {
   last = now;
   acc += el;
   let n = 0;
-  while (acc >= DT && n < 4) { update(DT); acc -= DT; n++; }
+  while (acc >= DT && n < 4) { if (!S.paused) update(DT); acc -= DT; n++; }
   if (n === 4) acc = 0;
   if (world) {
     world.update(el);
@@ -607,7 +606,6 @@ function update(dt) {
   if (st === 'beat' && S.bowl) {
     S.bowl.step(dt);
     bowl3d.update(S.bowl, S.t, dt);
-    if (S.bowl.eggs === 3) $('#m-mix').style.width = Math.round(S.bowl.mixedness() * 100) + '%';
   }
   const pan = S.pan;
   if ((st === 'cook' || st === 'fold') && pan) {
@@ -630,7 +628,7 @@ function update(dt) {
     $('#needle').style.transform = `rotate(${-90 + clamp(pan.T / 300, 0, 1) * 180}deg)`;
     const ct = pan.cookTime().toFixed(1) + 's';
     $('#cook-t').textContent = ct; $('#cook-t2').textContent = ct;
-    chefWatch(pan, agg);
+    chefWatch(pan);
   }
   if (plate3d && plate3d.om && (st === 'placed' || st === 'judge' || st === 'result' || st === 'plate')) plate3d.update(dt);
   if (st === 'placed') {
@@ -638,6 +636,16 @@ function update(dt) {
     if (plate3d.tipDone) startJudge();
   }
   if (st === 'judge') judgeTick(dt);
+}
+
+// Judging criteria, shown on the rules card (what's scored, not how to do it).
+$('#rubric').innerHTML = '';
+for (const sec of RUBRIC) {
+  const li = document.createElement('li');
+  const h = document.createElement('b'); h.textContent = `${sec.label} (${sec.max})`;
+  const ul = document.createElement('ul');
+  for (const it of sec.items) { const x = document.createElement('li'); x.textContent = it; ul.appendChild(x); }
+  li.append(h, ul); $('#rubric').appendChild(li);
 }
 
 setStage('beat');

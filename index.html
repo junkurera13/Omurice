@@ -26,7 +26,7 @@
     <div class="tag">· The Hanjuku-tei Trial ·</div>
     <nav class="topnav">
       <button class="chip" data-screen="fame">Wall of Fame</button>
-      <button class="chip" data-screen="recipe">Recipe card</button>
+      <button class="chip" data-screen="recipe">Rules</button>
       <button class="chip" id="mute" aria-pressed="false">Sound on</button>
     </nav>
   </header>
@@ -59,8 +59,7 @@
       <div class="panel" data-panel="beat">
         <h3>The bowl</h3>
         <button class="btn" id="b-crack">Crack an egg <span id="egg-n">0/3</span></button>
-        <p class="note">Then drag around the bowl in quick circles to beat.</p>
-        <div class="meter"><span>Evenness</span><div class="bar"><i id="m-mix"></i></div></div>
+        <p class="note">Drag in the bowl to beat. Click shell to pick it out.</p>
         <button class="btn go" id="b-to-cook" disabled>To the stove ▸</button>
       </div>
 
@@ -84,8 +83,6 @@
             <svg viewBox="0 0 140 90" aria-hidden="true">
               <path d="M14 80 A56 56 0 0 1 126 80" fill="none" stroke="#17110c" stroke-width="16"/>
               <path d="M16 80 A54 54 0 0 1 126 80" fill="none" stroke="#f2e5c6" stroke-width="10" />
-              <path id="zone-good" fill="none" stroke="#6a8f3a" stroke-width="10"/>
-              <path id="zone-hot" fill="none" stroke="#b8322a" stroke-width="10"/>
               <g id="needle"><path d="M70 80 L70 32" stroke="#17110c" stroke-width="4" stroke-linecap="round"/></g>
               <circle cx="70" cy="80" r="7" fill="#17110c"/>
             </svg>
@@ -102,13 +99,12 @@
       </div>
 
       <div class="panel" data-panel="fold" hidden>
-        <h3>Tap the wrist</h3>
-        <p class="note">Hold the pan tilted away, then tap your wrist so the egg jumps and folds over itself. Keep going until it's a football.</p>
+        <h3>The fold</h3>
+        <p class="note">TILT holds the pan tilted away from you. TAP knocks your wrist against the handle.</p>
         <div class="row2">
           <button class="btn hold" id="b-tilt">Hold to tilt <kbd>W</kbd></button>
           <button class="btn tap" id="b-tap">TAP! <kbd>Space</kbd></button>
         </div>
-        <div class="meter"><span>Fold</span><div class="bar"><i id="m-fold"></i></div></div>
         <div class="knob-mini" role="radiogroup" aria-label="Burner during fold">
           <span>Heat</span>
           <label><input type="radio" name="knob2" value="0"><span>Off</span></label>
@@ -122,7 +118,7 @@
 
       <div class="panel" data-panel="plate" hidden>
         <h3>Plate it</h3>
-        <p class="note">Click the rice where the omelette should land. Dead centre, seam down.</p>
+        <p class="note">Move the pan over the plate. Click to turn it over.</p>
       </div>
 
       <div class="panel" data-panel="judge" hidden>
@@ -140,7 +136,7 @@
     <div class="presents">Hanjuku-tei presents</div>
     <h1 class="big boil">OMURICE</h1>
     <div class="sub">A trial for line cooks</div>
-    <p class="pitch">One plate. Beat the eggs, scramble, tap them into a football, and lay it on the rice. Then the head chef slices it open. <b>Score over 90 and you're hired.</b></p>
+    <p class="pitch">One plate of omurice: the soft omelette that splits open over the rice. No recipe, no help. The head chef scores every step. <b>Score over 90 and you're hired.</b></p>
     <form id="apply" autocomplete="off">
       <label for="handle">Your 𝕏 username</label>
       <div class="handle"><span>@</span><input id="handle" maxlength="15" placeholder="yourname" spellcheck="false" autocapitalize="off"></div>
@@ -148,7 +144,7 @@
       <button class="btn go big-btn" type="submit">Start the trial</button>
     </form>
     <div class="title-links">
-      <button class="link" data-screen="recipe">Read the recipe card</button>
+      <button class="link" data-screen="recipe">How to play &amp; judging</button>
       <button class="link" data-screen="fame">Wall of Fame</button>
     </div>
   </div>
@@ -158,16 +154,18 @@
 <div class="screen" id="s-recipe" hidden>
   <div class="card paper recipe">
     <button class="x" data-close aria-label="Close">×</button>
-    <h2>Chef Okada's recipe card</h2>
-    <ol>
-      <li><b>Beat</b> three eggs until no white streaks are left. Fish out any shell.</li>
-      <li><b>Heat</b> the pan on medium-high. Add 10–20 g butter. Pour when it <em>foams</em>. Brown butter is too late.</li>
-      <li><b>Scramble</b> hard straight away, all over the pan, for about 8–12 seconds. Small soft curds.</li>
-      <li><b>Stop</b> when it looks like wet scrambled egg. Let the bottom set into a thin skin. Turn the heat down if you need time.</li>
-      <li><b>Fold.</b> Tilt the pan away and tap your wrist so the egg jumps and rolls over itself into an American-football shape. Raw skin tears. Overcooked egg cracks.</li>
-      <li><b>Plate</b> it seam-down in the middle of the rice. I cut it. If the inside is golden and runny it slides open and covers the rice. If it's solid, you're not hired.</li>
-    </ol>
-    <p class="sig">Pale yellow outside. Molten inside. Under a minute in the pan.</p>
+    <h2>Trial rules</h2>
+    <h4>Controls</h4>
+    <ul class="ctl">
+      <li><b>Bowl:</b> click to crack an egg. Drag to beat. Click shell to pick it out.</li>
+      <li><b>Stove:</b> set the burner, add butter, pour the eggs. Drag in the pan to work the chopsticks.</li>
+      <li><b>Fold:</b> hold TILT (W) to tilt the pan away. TAP (Space) knocks your wrist against the handle.</li>
+      <li><b>Plate:</b> move the pan over the plate and click to turn it over.</li>
+    </ul>
+    <h4>How you're judged</h4>
+    <p class="note">Nobody tells you what to do. The head chef scores every step, then cuts the omelette open.</p>
+    <ol class="rubric" id="rubric"></ol>
+    <p class="sig">Over 90: hired.</p>
   </div>
 </div>
 

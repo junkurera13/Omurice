@@ -232,7 +232,7 @@ kbd { font: 11px var(--type); border: 2px solid currentColor; border-radius: 4px
 
 .verdict { text-align: center; max-width: 600px; }
 .stamp {
-  display: inline-block; font: clamp(48px, 11vw, 84px)/1 var(--display); color: var(--cream); letter-spacing: .02em;
+  display: inline-block; font: clamp(34px, 8vw, 60px)/1 var(--display); color: var(--cream); letter-spacing: .02em; white-space: nowrap;
   -webkit-text-stroke: 3px var(--ink); text-shadow: 5px 5px 0 var(--ink); transform: rotate(-4deg);
   animation: slam .6s cubic-bezier(.2, 1.8, .4, 1);
 }
@@ -262,3 +262,21 @@ kbd { font: 11px var(--type); border: 2px solid currentColor; border-radius: 4px
 @media (prefers-reduced-motion: reduce) {
   .rays, .grain, .chef-head, .chef-body { animation: none !important; }
 }
+
+/* Rules card and scoresheet */
+.recipe h4 { margin: 14px 0 6px; font: 15px var(--deco); letter-spacing: .1em; text-transform: uppercase; color: var(--red); }
+.recipe .ctl { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.rubric { margin: 6px 0 0; padding-left: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; }
+.rubric > li > ul { margin: 2px 0 0; padding-left: 16px; font-size: 13px; color: #4a3a2a; }
+@media (max-width: 560px) { .rubric { grid-template-columns: 1fr; } }
+.lines li.sec { display: block; padding: 8px 10px; }
+.sec-head { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 2px dashed rgba(23,17,12,.35); padding-bottom: 3px; margin-bottom: 3px; }
+.sec-head b { font: 16px var(--display); }
+.sec-head .p { font: 17px var(--display); font-variant-numeric: tabular-nums; }
+.lines table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.lines td { padding: 2px 0; vertical-align: top; }
+.lines td.il { width: 40%; padding-right: 8px; }
+.lines td.in { color: #4a3a2a; }
+.lines td.ip { width: 3.6em; text-align: right; font-variant-numeric: tabular-nums; font-weight: bold; }
+.lines li.cap { background: var(--red); color: var(--cream); font-weight: bold; }
+.lines { max-height: 46vh; }

@@ -43,10 +43,8 @@ export class Bowl3D {
     g.add(this.liquid);
     // Falling egg (for the crack).
     this.shellMat = new THREE.MeshPhysicalMaterial({ color: 0xf1dfc6, roughness: 0.55, sheen: 0.4 });
-    this.drop = new THREE.Mesh(new THREE.SphereGeometry(2.1, 32, 24), this.shellMat);
-    this.drop.scale.set(1, 1.3, 1); this.drop.visible = false; this.drop.castShadow = true;
-    g.add(this.drop);
-    this.dropT = -1;
+    this.buildCrackRig();
+    this.crackT = -1;
     // Floating shell bits.
     this.bits = [];
     this.yolkGeo = new THREE.SphereGeometry(1, 40, 24, 0, Math.PI * 2, 0, Math.PI / 2);
@@ -66,15 +64,120 @@ export class Bowl3D {
     return [(gx - (BN - 1) / 2) * s, (gy - (BN - 1) / 2) * s];
   }
 
-  crackAnim() { this.dropT = 0; this.drop.visible = true; }
+  // A whole egg, split into two shell halves along the crack line.
+  buildCrackRig() {
+    const half = (from, to) => {
+      const pts = [];
+      for (let k = 0; k <= 28; k++) {
+        const t = from + ((to - from) * k) / 28;
+        const y = -Math.cos(Math.PI * t) * 2.8;
+        const r = Math.max(0.01, Math.sin(Math.PI * t) * 2.1 * (1 - 0.1 * (y / 2.8)));
+        pts.push([r, y]);
+      }
+      return lathe(pts, 48);
+    };
+    const outer = new THREE.MeshPhysicalMaterial({ color: 0xe8cfae, roughness: 0.65, sheen: 0.3, sheenColor: new THREE.Color(0xfff4e0), envMapIntensity: 0.5 });
+    const membrane = new THREE.MeshPhysicalMaterial({ color: 0xf7f3ea, roughness: 0.4, side: THREE.BackSide, envMapIntensity: 0.5 });
+    const SPLIT = 0.53;
+    const mk = geo => {
+      const gg = new THREE.Group();
+      const a = new THREE.Mesh(geo, outer), b = new THREE.Mesh(geo, membrane);
+      a.castShadow = true;
+      gg.add(a, b);
+      return gg;
+    };
+    this.egg = new THREE.Group();
+    this.eggTilt = new THREE.Group();
+    this.eggTilt.rotation.z = -Math.PI / 2;          // long axis horizontal
+    this.hA = mk(half(0, SPLIT));
+    this.hB = mk(half(SPLIT, 1));
+    this.splitY = -Math.cos(Math.PI * SPLIT) * 2.8;
+    this.eggTilt.add(this.hA, this.hB);
+    this.egg.add(this.eggTilt);
+    this.egg.visible = false;
+    this.group.add(this.egg);
+    // What falls out: yolk and white.
+    this.fallYolk = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 18), subsurface(new THREE.MeshPhysicalMaterial({ color: 0xe8780a, roughness: 0.15, clearcoat: 0.8, envMapIntensity: 0.4 }), { color: [1, 0.45, 0.05], wrap: 0.6, back: 0.5 }));
+    this.fallWhite = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 18), new THREE.MeshPhysicalMaterial({ color: 0xf4efd8, roughness: 0.05, clearcoat: 1, transparent: true, opacity: 0.45, depthWrite: false, envMapIntensity: 0.6 }));
+    this.fallYolk.visible = this.fallWhite.visible = false;
+    this.group.add(this.fallYolk, this.fallWhite);
+  }
+
+  get crackBusy() { return this.crackT >= 0; }
+
+  // Bring an egg in, tap it on the rim, pull it apart over `target`
+  // (local x/z) and let the yolk and white fall in.
+  crackAnim(target, onTap, onDrop) {
+    if (this.crackBusy) return false;
+    this.crackT = 0; this.crackTarget = target; this.onTap = onTap; this.onDrop = onDrop;
+    this.tapped = false; this.dropped = false;
+    this.egg.visible = true;
+    this.hA.position.set(0, 0, 0); this.hB.position.set(0, 0, 0);
+    this.hA.rotation.set(0, 0, 0); this.hB.rotation.set(0, 0, 0);
+    this.egg.scale.setScalar(1);
+    return true;
+  }
+
+  updateCrack(dt) {
+    if (this.crackT < 0) return;
+    const t = (this.crackT += dt);
+    const P = this.crackTarget;
+    const ease = x => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
+    const L = (a, b, k) => a + (b - a) * k;
+    const rim = new THREE.Vector3(10.6, 8.3, 0);
+    let pos;
+    if (t < 0.3) {
+      // Swing in and knock it on the rim.
+      const k = ease(t / 0.3);
+      pos = new THREE.Vector3(L(17, rim.x, k), L(15, rim.y, k), L(3, rim.z, k));
+      this.egg.rotation.set(0, 0, L(0.9, 0.15, k));
+    } else if (t < 0.42) {
+      if (!this.tapped) { this.tapped = true; this.onTap && this.onTap(); }
+      const k = ease((t - 0.3) / 0.12);
+      pos = new THREE.Vector3(L(rim.x, 11.6, k), L(rim.y, 9.4, k), 0);
+      this.egg.rotation.set(0, 0, 0.15);
+    } else if (t < 0.7) {
+      // Over the bowl.
+      const k = ease((t - 0.42) / 0.28);
+      pos = new THREE.Vector3(L(11.6, P.x, k), L(9.4, 10.6, k), L(0, P.z, k));
+      this.egg.rotation.set(0, 0, L(0.15, 0, k));
+    } else {
+      pos = new THREE.Vector3(P.x, 10.6, P.z);
+      // Thumbs pull the halves apart; the open ends tip down.
+      const k = ease((t - 0.7) / 0.25);
+      const away = Math.max(0, t - 1.0);
+      this.hA.position.set(0, -k * 1.3 - away * 6, 0);
+      this.hB.position.set(0, k * 1.3 + away * 6, 0);
+      this.hA.rotation.z = -k * 1.0; this.hB.rotation.z = k * 1.0;
+      this.egg.position.y = 10.6 + away * 8;
+      const sh = Math.max(0, 1 - away * 2.2);
+      this.egg.scale.setScalar(sh);
+      if (sh <= 0) this.egg.visible = false;
+    }
+    if (t < 0.7) this.egg.position.copy(pos);
+    else this.egg.position.set(P.x, this.egg.position.y, P.z);
+    // Contents slip out of the gap and fall.
+    const t0 = 0.8;
+    if (t > t0 && !this.dropped) {
+      const ft = t - t0;
+      const y = 10.2 - 45 * ft * ft;
+      const v = 90 * ft;
+      this.fallYolk.visible = this.fallWhite.visible = true;
+      this.fallYolk.position.set(P.x, y, P.z);
+      this.fallYolk.scale.set(1.05, 1.05 * (1 + v * 0.01), 1.05);
+      this.fallWhite.position.set(P.x + 0.3, y + 0.6, P.z);
+      this.fallWhite.scale.set(1.6, 1.6 * (1 + v * 0.025), 1.4);
+      if (y <= LIQ_Y + 0.5) {
+        this.dropped = true;
+        this.fallYolk.visible = this.fallWhite.visible = false;
+        this.onDrop && this.onDrop();
+      }
+    }
+    if (t > 1.6 && this.dropped) { this.crackT = -1; this.egg.visible = false; }
+  }
 
   update(bowl, t, dt) {
-    if (this.dropT >= 0) {
-      this.dropT += dt;
-      const y = 18 - this.dropT * this.dropT * 90;
-      this.drop.position.set(0.5, Math.max(LIQ_Y + 1, y), 0.3);
-      if (y < LIQ_Y + 1) { this.drop.visible = false; this.dropT = -1; }
-    }
+    this.updateCrack(dt);
     // Shell fragments.
     while (this.bits.length < bowl.shells.length) {
       const m = new THREE.Mesh(this.bitGeo, this.shellMat);
