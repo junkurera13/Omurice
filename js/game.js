@@ -21,7 +21,7 @@ $('#handle').addEventListener('focus', () => titleChef.say('Name. Then wash your
 
 // Camera spots, relative to each set's origin.
 const VIEWS = {
-  beat: { set: 'bowl', pos: V(6.5, 42, 35), at: V(6.5, 1.5, 4.3) },
+  beat: { set: 'bowl', pos: V(7.2, 51, 38), at: V(7.2, 1.5, 1.6) },
   cook: { set: 'stove', pos: V(0, 44, 19), at: V(0, 2, -1.5) },
   fold: { set: 'stove', pos: V(-26, 21, 14), at: V(0, 3, -3.5) },
   plate: { set: 'plate', pos: V(-30, 32, 30), at: V(0, 5, -4) },
@@ -42,7 +42,7 @@ try {
   stove = new Stove(world, SETS.stove);
   pan3d = new Pan3D(world, stove);
   plate3d = new Plate3D(world, SETS.plate, wood);
-  bowlSticks = new Chopsticks(bowl3d.group, { x: 5, z: 13 });
+  bowlSticks = new Chopsticks(bowl3d.group, { x: 8.7, z: 12.2 });
   panSticks = new Chopsticks(pan3d.group);
   const [p, t] = viewPos(VIEWS.cook);
   world.snapCamera(p.add(V(0, 8, 10)), t);

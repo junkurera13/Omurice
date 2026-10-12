@@ -12,18 +12,21 @@ const LIQ_R = 6.55;  // liquid radius (cm), matches the bowl wall at that height
 // Surface height and radius for 0-5 eggs, from the bowl's inner profile.
 const LEVEL_Y = [0.6, 1.71, 2.38, 2.9, 3.34, 3.74, 4.1];
 const LEVEL_R = [3.4, 5.07, 5.96, 6.55, 7.0, 7.38, 7.7];
+// The bowl sits this far left of the set's centre (cm); the counter doesn't move.
+const SHIFT = 1.5;
 // The carton: two rows of three cups to the right of the bowl.
-const CARTON = { x: 16.2, z: 0.5, w: 9.6, d: 14.2, h: 2.2 };
+const CARTON = { x: 19.1, z: -1.3, w: 9.6, d: 14.2, h: 2.2 };
 const CUPS = [[-2.3, -4.6], [2.3, -4.6], [-2.3, 0], [2.3, 0], [-2.3, 4.6], [2.3, 4.6]];
 
 export class Bowl3D {
   constructor(world, origin, wood) {
     const g = (this.group = new THREE.Group());
     g.position.copy(origin);
+    g.position.x -= SHIFT;
     world.scene.add(g);
     // Counter.
     const board = new THREE.Mesh(new THREE.PlaneGeometry(90, 70), new THREE.MeshPhysicalMaterial({ map: wood, roughness: 0.55, clearcoat: 0.15 }));
-    board.rotation.x = -Math.PI / 2; board.receiveShadow = true;
+    board.rotation.x = -Math.PI / 2; board.position.x = SHIFT; board.receiveShadow = true;
     g.add(board);
     // Ceramic bowl.
     const prof = [[0.01, 0.25]];
