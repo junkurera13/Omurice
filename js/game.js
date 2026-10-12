@@ -21,7 +21,7 @@ $('#handle').addEventListener('focus', () => titleChef.say('Name. Then wash your
 
 // Camera spots, relative to each set's origin.
 const VIEWS = {
-  beat: { set: 'bowl', pos: V(6.5, 40, 31), at: V(6.5, 1.5, 0.8) },
+  beat: { set: 'bowl', pos: V(6.5, 42, 35), at: V(6.5, 1.5, 4.3) },
   cook: { set: 'stove', pos: V(0, 44, 19), at: V(0, 2, -1.5) },
   fold: { set: 'stove', pos: V(-26, 21, 14), at: V(0, 3, -3.5) },
   plate: { set: 'plate', pos: V(-30, 32, 30), at: V(0, 5, -4) },
@@ -42,7 +42,7 @@ try {
   stove = new Stove(world, SETS.stove);
   pan3d = new Pan3D(world, stove);
   plate3d = new Plate3D(world, SETS.plate, wood);
-  bowlSticks = new Chopsticks(bowl3d.group);
+  bowlSticks = new Chopsticks(bowl3d.group, { x: 5, z: 13 });
   panSticks = new Chopsticks(pan3d.group);
   const [p, t] = viewPos(VIEWS.cook);
   world.snapCamera(p.add(V(0, 8, 10)), t);
@@ -199,6 +199,7 @@ function startBeat() {
   $('#egg-n').textContent = '0';
   $('#b-crack').disabled = false;
   if (bowl3d) bowl3d.resetCarton();
+  if (bowlSticks) bowlSticks.putDown();
   $('#b-to-cook').disabled = true;
   $('#b-butter').disabled = false; $('#butter-g').textContent = '(10 g)';
   $('#b-pour').disabled = true; $('#b-to-fold').disabled = true; $('#b-to-plate').disabled = true;
@@ -223,7 +224,7 @@ function crackEgg(near) {
   if (!from) return;
   const gx = (b.N - 1) / 2 + (Math.random() - 0.5) * 16, gy = (b.N - 1) / 2 + (Math.random() - 0.5) * 16;
   const [x, z] = bowl3d.toLocal(gx, gy);
-  caption('');
+  if (!b.eggs) caption('');
   bowl3d.crackAnim({ x, z }, () => sound.crack(), () => {
     sound.plop();
     eggLanded(b.crack(gx, gy));
@@ -236,9 +237,8 @@ function eggLanded(res) {
   $('#b-to-cook').disabled = false;
   if (res && res.shell) chef.say('I saw that.', 'sniff');
   else if (b.eggs === MAX_EGGS) chef.say('The whole carton? Bold.', 'shock');
-  caption(b.eggs < MAX_EGGS
-    ? 'Crack another, or drag in the bowl to beat. Click shell to pick it out.'
-    : 'Drag in the bowl to beat. Click shell to pick it out.');
+  // One nudge after the first egg; after that the cook knows the eggs.
+  if (b.eggs === 1 && !bowlSticks.held) caption('When you’re ready, pick up the chopsticks and beat the eggs.');
 }
 $('#b-crack').addEventListener('click', () => { sound.init(); crackEgg(); });
 $('#b-to-cook').addEventListener('click', () => {
@@ -256,7 +256,7 @@ function startCook() {
   setKnob(0);
   $('#b-pour').disabled = false;
   chef.say('Your station.', 'sniff');
-  caption('Burner, butter and eggs are on the right. Drag in the pan to use the chopsticks.');
+  caption('Your burner, butter and eggs are on the right.');
 }
 function setKnob(k) {
   if (S.pan) S.pan.setKnob(k);
@@ -278,6 +278,7 @@ $('#b-pour').addEventListener('click', () => {
   S.pan.startPour(S.bowl);
   $('#b-pour').disabled = true;
   $('#b-butter').disabled = true;
+  caption('Stir with the chopsticks.');
   setTimeout(() => { if (S.stage === 'cook') caption(''); }, 4000);
   setTimeout(() => { if (S.stage === 'cook') $('#b-to-fold').disabled = false; }, 1600);
 });
@@ -291,6 +292,7 @@ function startFold() {
   setStage('fold');
   goView('fold');
   panSticks.place(null);
+  cv.style.cursor = '';
   $('#b-to-plate').disabled = false;
   chef.say('Show me your fold.', 'sniff');
   caption('Hold TILT (W) to tilt the pan away. TAP (Space) knocks your wrist.');
@@ -512,6 +514,14 @@ cv.addEventListener('pointerdown', e => {
     // The carton: crack the egg under the cursor.
     const cp = world.hitLocalPlane(e.clientX, e.clientY, bowl3d.group, bowl3d.cartonTopY());
     if (bowl3d.overCarton(cp)) { crackEgg(cp); P.down = false; return; }
+    // The chopsticks: click them on their rest to pick up; click the rest to put them back.
+    const tp = world.hitLocalPlane(e.clientX, e.clientY, bowl3d.group, 0.8);
+    if (bowlSticks.overRest(tp)) {
+      sound.tap();
+      bowlSticks.held ? bowlSticks.putDown() : bowlSticks.pickUp();
+      caption('');
+      P.down = false; onMove(e); return;
+    }
     if (!b.eggs) { P.down = false; return; }
     const h = bowlHit(e);
     if (h && b.removeShellAt(h.cell[0], h.cell[1])) {
@@ -537,10 +547,12 @@ function onMove(e) {
   const P = S.ptr;
   const now = performance.now();
   const dt = Math.max(1, now - P.lastT) / 1000;
-  if (S.stage === 'beat' && S.bowl && S.bowl.eggs > 0) {
+  if (S.stage === 'beat' && S.bowl) {
     const h = bowlHit(e);
-    bowlSticks.place(h && h.p, P.down, S.t);
-    if (h && P.down && P.last) {
+    // Off the bowl, carry the chopsticks above the rim.
+    const off = h && Math.hypot(h.p.x, h.p.z) > 10;
+    bowlSticks.place(h && (off ? h.p.clone().setY(8) : h.p), P.down && !off, S.t);
+    if (h && P.down && P.last && bowlSticks.held && S.bowl.eggs > 0) {
       const [lx, ly] = P.last;
       P.vx = lerp(P.vx, (h.cell[0] - lx) / dt, 0.5); P.vy = lerp(P.vy, (h.cell[1] - ly) / dt, 0.5);
       const steps = Math.max(1, Math.ceil(Math.hypot(h.cell[0] - lx, h.cell[1] - ly) / 2));
@@ -550,7 +562,7 @@ function onMove(e) {
     P.last = h ? h.cell : null;
   } else if (S.stage === 'cook' && S.pan) {
     const h = panHit(e);
-    panSticks.place(S.pan.poured && h ? h.p : null, P.down, S.t);
+    panSticks.place(h && h.p, P.down, S.t);
     if (h && P.down && P.last && S.pan.poured) {
       const [lx, ly] = P.last;
       P.vx = lerp(P.vx, (h.cell[0] - lx) / dt, 0.5); P.vy = lerp(P.vy, (h.cell[1] - ly) / dt, 0.5);
@@ -558,12 +570,16 @@ function onMove(e) {
       let w = 0;
       for (let i = 1; i <= steps; i++) w += S.pan.stir(lerp(lx, h.cell[0], i / steps), lerp(ly, h.cell[1], i / steps), P.vx, P.vy, dt / steps);
       if (w > 0 && Math.random() < 0.3) sound.scrape();
+      if (w > 0) caption('');
     }
     P.last = h ? h.cell : null;
   } else if (S.stage === 'plate') {
     const p = hitPlate(e.clientX, e.clientY);
     if (p) { S.aimP = p; plate3d.setAim(p.x, p.z); }
   }
+  // Chopsticks in hand stand in for the cursor.
+  const inHand = (S.stage === 'beat' && bowlSticks.held && bowlSticks.group.visible) || (S.stage === 'cook' && panSticks.group.visible);
+  cv.style.cursor = inHand ? 'none' : '';
   P.lastT = now;
 }
 

@@ -493,7 +493,7 @@ export class Pan {
     const agg = (this._lastAgg = this._aggTick > 0 ? this._lastAgg : this.aggregate());
     this._aggTick = (this._aggTick || 0) > 0 ? this._aggTick - 1 : 6;
     // Wet egg pulls heat out of the metal.
-    if (agg.mass > 0) dT -= agg.cover * (this.T - 45) * 0.03 * (1 - 0.5 * clamp(agg.dm, 0, 1));
+    if (agg.mass > 0) dT -= agg.cover * Math.max(0, this.T - 45) * 0.03 * (1 - 0.5 * clamp(agg.dm, 0, 1));
     this.T += dT * dt;
     if (this.T > this.stats.maxT) this.stats.maxT = this.T;
 
@@ -533,8 +533,8 @@ export class Pan {
         this.yk[k] = this.yk[k] * (1 - f) + ykIn * f;
         this.h[k] = hn;
       }
-      // Cold egg hitting the metal.
-      this.T -= (32 * dv) / this.pourTotal;
+      // Cold egg (~18 °C) hitting the metal: it can't chill the pan below itself.
+      this.T -= (Math.min(32, (this.T - 18) * 0.25) * dv) / this.pourTotal;
       if (this.pourLeft <= 0 && this.stats.butterAtPour && this.stats.butterAtPour.brown > 0.2) {
         const b = this.stats.butterAtPour.brown * 0.25;
         for (let k = 0; k < this.br.length; k++) if (this.h[k] > 0.1) this.br[k] += b;

@@ -406,7 +406,10 @@ export class Pan3D {
 }
 
 export class Chopsticks {
-  constructor(parent) {
+  // With `rest` ({x, z}: the middle of the pair, in the parent's frame) the
+  // pair lies there across the counter, tips left on a chopstick rest, until
+  // picked up. Without one they are always in hand.
+  constructor(parent, rest) {
     const g = (this.group = new THREE.Group());
     const wood = new THREE.MeshPhysicalMaterial({ color: 0xc89a62, roughness: 0.55, clearcoat: 0.3 });
     for (const o of [-0.45, 0.45]) {
@@ -418,13 +421,39 @@ export class Chopsticks {
     }
     g.visible = false;
     parent.add(g);
+    this.rest = rest || null;
+    if (rest) {
+      // A little glazed hashioki under the tips.
+      const block = new THREE.Mesh(new THREE.CapsuleGeometry(0.55, 2.6, 6, 16), new THREE.MeshPhysicalMaterial({ color: 0x22409a, roughness: 0.25, clearcoat: 1 }));
+      block.rotation.x = Math.PI / 2;
+      block.scale.set(1, 1, 0.8);
+      block.position.set(rest.x - 11, 0.45, rest.z);
+      block.castShadow = block.receiveShadow = true;
+      parent.add(block);
+    }
+    this.putDown();
+  }
+  // Is local point p (on the table) over the resting chopsticks?
+  overRest(p) {
+    return !!(this.rest && p && Math.abs(p.x - this.rest.x) < 13 && Math.abs(p.z - this.rest.z) < 2.6);
+  }
+  pickUp() { this.held = true; this.group.visible = false; }
+  putDown() {
+    this.held = !this.rest;
+    this.group.visible = !this.held;
+    if (this.held) return;
+    // Lying flat, tips propped on the rest.
+    this.group.position.set(this.rest.x - 12, 1.25, this.rest.z);
+    this.group.rotation.set(0, 0, -Math.PI / 2 - 0.04);
+    this.group.children.forEach((c, i) => c.position.set(0, 0, i ? 0.45 : -0.45));
   }
   place(p, down, t) {
+    if (!this.held) return;
     this.group.visible = !!p;
     if (!p) return;
     this.group.position.set(p.x, p.y + (down ? 0.1 : 1.2), p.z);
     this.group.rotation.set(-0.55, 0.5, -0.35);
-    this.group.children[0].position.x = down ? -0.25 : -0.5;
-    this.group.children[1].position.x = down ? 0.25 : 0.5;
+    this.group.children[0].position.set(down ? -0.25 : -0.5, 0, 0);
+    this.group.children[1].position.set(down ? 0.25 : 0.5, 0, 0);
   }
 }
